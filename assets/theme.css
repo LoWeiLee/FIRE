@@ -251,3 +251,13 @@ textarea:focus{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-dim)}
 .dv-dev{font-family:var(--mono);white-space:nowrap;color:var(--txt2)}
 .dv-dev.hot{color:var(--gold-bright);font-weight:600}
 .dv-hotrow td{background:rgba(224,178,90,0.06)}
+
+/* ---------- 模組3：交易日誌 ---------- */
+.jr-bar2{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+.jr-dist{display:flex;flex-direction:column;gap:9px}
+.jr-row{display:grid;grid-template-columns:120px 1fr auto;align-items:center;gap:12px}
+.jr-label{font-size:14px;color:var(--txt);font-weight:600}
+.jr-track{height:16px;background:var(--ink2);border:1px solid var(--line2);border-radius:5px;overflow:hidden}
+.jr-fill{height:100%;background:linear-gradient(90deg,rgba(224,178,90,0.5),var(--gold));border-radius:4px 0 0 4px}
+.jr-val{font-family:var(--mono);font-size:13px;color:var(--txt);white-space:nowrap;text-align:right;min-width:48px}
+@media(max-width:620px){.jr-row{grid-template-columns:90px 1fr auto;gap:8px}}
