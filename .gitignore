@@ -1,0 +1,12 @@
+# 原始 FIRE 備份（保留在本機，不上傳公開 repo）
+_legacy/
+
+# 作業系統 / 編輯器雜項
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# Node（若日後本機用到工具，產物不上傳）
+node_modules/
