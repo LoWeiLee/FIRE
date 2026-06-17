@@ -1,7 +1,7 @@
 /* ============================================================
    modules/deviation/deviation.js — 模組2：組合偏離視覺化
-   - 貼上 CSV/表格 → 解析 → 存入共享持股資料（holdings）
-   - 實際佔比由現值自動換算（現值缺漏才用 CSV 佔比欄）
+   - 可編輯表格逐欄輸入（代號/現值/目標%/分類），實際%自動換算、邊改邊算
+   - 資料即時存入共享持股資料（holdings），與分批建倉共用
    - 現金以代號「現金 / CASH / $」當一列，納入組合總值
    - 輸出：分類層級 treemap（squarified，依設定分類法上色）、
            實際 vs 目標偏離橫條（>5 個百分點高亮）、觸發點燈號列
@@ -16,17 +16,20 @@ export const title = '組合偏離';
 const LAYER_COLORS = ['#e0b25a', '#6e9bc0', '#7fbf9a', '#c98b6b', '#9a86c4', '#d4a13c', '#5f9ea0', '#bf7f8a'];
 const CASH_COLOR = '#5a626c';
 
-const DEMO = `代號,現值,實際佔比,目標佔比,分類層級
-NVDA,1800000,,20,半導體 / 算力
-AVGO,900000,,10,半導體 / 算力
-ASML,800000,,8,設備 / 製造
-TSM,1200000,,12,設備 / 製造
-MSFT,1000000,,12,雲端 / 基礎建設
-AMZN,700000,,8,雲端 / 基礎建設
-GOOGL,900000,,10,模型 / 平台
-PLTR,600000,,6,應用 / 軟體
-VRT,500000,,6,終端 / 週邊
-現金,1100000,,8,現金`;
+const DEMO_ROWS = [
+  { ticker: 'NVDA', value: 1800000, target: 20, layer: '半導體 / 算力' },
+  { ticker: 'AVGO', value: 900000, target: 10, layer: '半導體 / 算力' },
+  { ticker: 'ASML', value: 800000, target: 8, layer: '設備 / 製造' },
+  { ticker: 'TSM', value: 1200000, target: 12, layer: '設備 / 製造' },
+  { ticker: 'MSFT', value: 1000000, target: 12, layer: '雲端 / 基礎建設' },
+  { ticker: 'AMZN', value: 700000, target: 8, layer: '雲端 / 基礎建設' },
+  { ticker: 'GOOGL', value: 900000, target: 10, layer: '模型 / 平台' },
+  { ticker: 'PLTR', value: 600000, target: 6, layer: '應用 / 軟體' },
+  { ticker: 'VRT', value: 500000, target: 6, layer: '終端 / 週邊' },
+  { ticker: '現金', value: 1100000, target: 8, layer: '現金' },
+];
+
+let state = { rows: [] };
 
 export function unmount() {}
 
@@ -35,37 +38,15 @@ function fmt(n) { return (n == null || !isFinite(n)) ? '—' : Math.round(n).toL
 function fmt1(n) { return (n == null || !isFinite(n)) ? '—' : n.toFixed(1); }
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function isCash(t) { return /^(現金|cash|\$|cash\$|現金\$)$/i.test(String(t).trim()); }
-function num(s) { const v = parseFloat(String(s == null ? '' : s).replace(/[%,\s]/g, '')); return isNaN(v) ? null : v; }
-
-/* ---------- CSV 解析 ---------- */
-function parseCSV(text) {
-  const lines = text.trim().split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  if (!lines.length) return [];
-  let rows = lines.map(l => l.split(/\t|,/).map(c => c.trim()));
-  if (rows.length && num(rows[0][1]) == null) rows = rows.slice(1);
-  return rows.map(c => {
-    let ticker = c[0] || '', value = num(c[1]), pctGiven = null, target = 0, layer = '未分類';
-    if (c.length >= 5) { pctGiven = num(c[2]); target = num(c[3]) || 0; layer = c[4] || '未分類'; }
-    else if (c.length === 4) { target = num(c[2]) || 0; layer = c[3] || '未分類'; }
-    else if (c.length === 3) { layer = c[2] || '未分類'; }
-    return { ticker: ticker.trim(), value, pctGiven, target, layer: String(layer).trim() };
-  }).filter(r => r.ticker);
-}
-
-function holdingsToCSV(h) {
-  if (!h.length) return '';
-  return '代號,現值,實際佔比,目標佔比,分類層級\n' +
-    h.map(r => `${r.ticker},${r.value},,${r.target},${r.layer}`).join('\n');
-}
+function n(v) { const x = parseFloat(v); return isNaN(x) ? 0 : x; }
 
 /* ---------- 計算 ---------- */
 function analyze(rows) {
   const total = rows.reduce((s, r) => s + (r.value || 0), 0);
   const items = rows.map(r => {
-    const actual = (r.value != null && total > 0) ? r.value / total * 100
-      : (r.pctGiven != null ? r.pctGiven : 0);
+    const actual = total > 0 ? (r.value || 0) / total * 100 : 0;
     return {
-      ticker: r.ticker, value: r.value || 0, layer: r.layer,
+      ticker: r.ticker, value: r.value || 0, layer: r.layer || '未分類',
       actual, target: r.target || 0, dev: actual - (r.target || 0),
       cash: isCash(r.ticker),
     };
@@ -74,6 +55,13 @@ function analyze(rows) {
   const byLayer = {};
   items.forEach(i => { byLayer[i.layer] = (byLayer[i.layer] || 0) + i.actual; });
   return { total, items, cashPct: cash, byLayer };
+}
+
+/* 取出可用的持股列（有代號者），供分析與儲存 */
+function cleanRows() {
+  return state.rows
+    .filter(r => String(r.ticker || '').trim())
+    .map(r => ({ ticker: String(r.ticker).trim(), value: n(r.value), target: n(r.target), layer: String(r.layer || '未分類').trim() || '未分類' }));
 }
 
 /* ---------- squarified treemap ---------- */
@@ -124,11 +112,12 @@ function layerColorMap(items) {
   return map;
 }
 
-/* ---------- 渲染輸出 ---------- */
+/* ---------- 渲染診斷輸出 ---------- */
 function renderOutput(view, rows) {
   const box = view.querySelector('#dv-out');
+  if (!box) return;
   if (!rows.length) {
-    box.innerHTML = `<div class="placeholder" style="margin:20px 0"><div class="tag">尚無資料</div><h2>貼上持股或載入示範資料</h2><p>在左側貼上 CSV／表格文字後按「解析並儲存」，或按「載入示範資料」看效果。</p></div>`;
+    box.innerHTML = `<div class="placeholder" style="margin:20px 0"><div class="tag">尚無資料</div><h2>在左側表格輸入持股</h2><p>每列填一檔：代號、現值、目標佔比、分類層級。實際佔比會自動算。也可按「載入示範資料」看效果。</p></div>`;
     return;
   }
   const a = analyze(rows);
@@ -217,41 +206,88 @@ function renderOutput(view, rows) {
     </div>`;
 }
 
-function doParse(view, save) {
-  const text = view.querySelector('#dv-input').value;
-  const rows = parseCSV(text);
-  if (save && rows.length) {
-    setHoldings(rows.map(r => ({ ticker: r.ticker, value: r.value || 0, target: r.target || 0, layer: r.layer })));
-    flash(view, '已解析並儲存 ✓');
-  }
-  renderOutput(view, rows);
+/* ---------- 渲染可編輯表格（結構變動時重建） ---------- */
+function renderTable(view) {
+  const tbody = view.querySelector('#dv-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = state.rows.map((r, i) => `
+    <tr data-i="${i}">
+      <td><input type="text" data-f="ticker" value="${esc(r.ticker || '')}" placeholder="代號" style="text-transform:uppercase"></td>
+      <td><input type="number" data-f="value" value="${r.value === '' || r.value == null ? '' : r.value}" min="0" step="1000" placeholder="現值"></td>
+      <td><input type="number" data-f="target" value="${r.target === '' || r.target == null ? '' : r.target}" min="0" max="100" step="0.5" placeholder="%"></td>
+      <td><input type="text" data-f="layer" value="${esc(r.layer || '')}" list="dv-layers" placeholder="分類層級"></td>
+      <td class="num"><span data-actual="${i}">—</span></td>
+      <td><button class="dv-del" data-del="${i}" title="刪除此列">×</button></td>
+    </tr>`).join('');
+
+  tbody.querySelectorAll('input[data-f]').forEach(inp => inp.addEventListener('input', () => {
+    const tr = inp.closest('tr'); const i = +tr.dataset.i; const f = inp.dataset.f;
+    state.rows[i][f] = inp.type === 'number' ? (inp.value === '' ? '' : n(inp.value)) : inp.value;
+    syncDerived(view);
+  }));
+  tbody.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => {
+    state.rows.splice(+b.dataset.del, 1);
+    if (!state.rows.length) state.rows.push(blankRow());
+    renderTable(view); syncDerived(view);
+  }));
+  syncDerived(view);
 }
 
-function flash(view, msg) {
-  const m = view.querySelector('#dv-msg');
-  if (m) { m.textContent = msg; setTimeout(() => { if (m) m.textContent = ''; }, 2500); }
+/* ---------- 即時更新（不重建輸入框，保留游標） ---------- */
+function syncDerived(view) {
+  const total = state.rows.reduce((s, r) => s + n(r.value), 0);
+  state.rows.forEach((r, i) => {
+    const cell = view.querySelector(`[data-actual="${i}"]`);
+    if (cell) cell.textContent = total > 0 ? (n(r.value) / total * 100).toFixed(1) + '%' : '—';
+  });
+  const targetSum = state.rows.reduce((s, r) => s + n(r.target), 0);
+  const tEl = view.querySelector('#dv-total'); if (tEl) tEl.textContent = fmt(total);
+  const sEl = view.querySelector('#dv-tsum');
+  if (sEl) {
+    sEl.textContent = fmt1(targetSum) + '%';
+    sEl.className = 'dv-sum' + (Math.abs(targetSum - 100) > 0.5 ? ' off' : '');
+  }
+  const hold = cleanRows();
+  setHoldings(hold);
+  renderOutput(view, hold);
 }
+
+function blankRow() { return { ticker: '', value: '', target: '', layer: '' }; }
 
 export function mount(view) {
   const existing = getHoldings();
-  const prefill = existing.length ? holdingsToCSV(existing) : '';
+  state = { rows: existing.length ? existing.map(r => ({ ticker: r.ticker, value: r.value, target: r.target, layer: r.layer })) : [blankRow(), blankRow(), blankRow()] };
+
+  const layerOpts = activeLayers().concat(['現金']).map(l => `<option value="${esc(l)}">`).join('');
 
   view.innerHTML = `
     <header><div class="brand">
       <h1>組合偏離視覺化</h1>
-      <p>貼上你的持股，工具把「實際長相」攤開來看：分類層級 treemap、每檔實際 vs 目標的偏離、以及對照你設定門檻的觸發點燈號。這裡只做診斷呈現，不告訴你該買該賣。資料只存在你的瀏覽器，並與分批建倉計算器共用。</p>
+      <p>在表格裡逐欄填入持股，工具即時把組合的實際長相攤開：分類層級 treemap、每檔實際 vs 目標的偏離、以及對照你設定門檻的觸發點燈號。邊改邊算，只做診斷呈現、不告訴你該買該賣。資料只存在你的瀏覽器，並與分批建倉計算器共用。</p>
     </div></header>
+
+    <datalist id="dv-layers">${layerOpts}</datalist>
 
     <div class="grid">
       <div class="controls">
         <div class="panel">
-          <div class="seclabel">貼上持股</div>
-          <div class="field">
-            <div class="sub">欄位：代號, 現值, 實際佔比(可空), 目標佔比, 分類層級。實際佔比一律由現值自動換算，該欄可留空、也可整欄省略（改填 4 欄：代號, 現值, 目標佔比, 分類層級）。現金請用代號「現金」或 CASH 當一列。逗號或 Tab 分隔皆可，可含表頭。</div>
-            <textarea id="dv-input" rows="12" placeholder="代號,現值,實際佔比,目標佔比,分類層級&#10;NVDA,1800000,,20,半導體 / 算力&#10;現金,1100000,,8,現金">${esc(prefill)}</textarea>
+          <div class="seclabel">持股輸入</div>
+          <div class="sub" style="margin-bottom:12px">每列一檔：代號、現值、目標佔比 %、分類層級（可從建議清單選或自行輸入）。實際佔比自動算。現金請用代號「現金」或 CASH 當一列。</div>
+          <div class="tr-tablewrap">
+            <table class="dv-edit">
+              <thead><tr><th>代號</th><th>現值</th><th>目標%</th><th>分類層級</th><th>實際%</th><th></th></tr></thead>
+              <tbody id="dv-tbody"></tbody>
+              <tfoot><tr>
+                <td class="dv-foot">合計</td>
+                <td class="num dv-foot"><span id="dv-total">—</span></td>
+                <td class="num dv-foot"><span id="dv-tsum" class="dv-sum">—</span></td>
+                <td colspan="3" class="dv-foot" style="color:var(--txt3);font-weight:400">目標佔比合計（含現金）建議接近 100%</td>
+              </tr></tfoot>
+            </table>
           </div>
-          <div class="savebar">
-            <button class="btn-primary" id="dv-parse" type="button">解析並儲存</button>
+          <div class="savebar" style="margin-top:14px">
+            <button class="btn-ghost" id="dv-add" type="button">＋ 新增持股</button>
+            <button class="btn-ghost" id="dv-addcash" type="button">＋ 新增現金列</button>
             <button class="btn-ghost" id="dv-demo" type="button">載入示範資料</button>
             <button class="btn-ghost" id="dv-clear" type="button">清空</button>
             <span class="savemsg" id="dv-msg"></span>
@@ -263,11 +299,21 @@ export function mount(view) {
     </div>`;
 
   const q = id => view.querySelector('#' + id);
-  q('dv-parse').addEventListener('click', () => doParse(view, true));
-  q('dv-demo').addEventListener('click', () => { q('dv-input').value = DEMO; doParse(view, true); });
+  q('dv-add').addEventListener('click', () => { state.rows.push(blankRow()); renderTable(view); flash(view, '已新增一列'); });
+  q('dv-addcash').addEventListener('click', () => {
+    if (!state.rows.some(r => isCash(r.ticker))) state.rows.push({ ticker: '現金', value: '', target: '', layer: '現金' });
+    else flash(view, '已有現金列');
+    renderTable(view);
+  });
+  q('dv-demo').addEventListener('click', () => { state.rows = DEMO_ROWS.map(r => ({ ...r })); renderTable(view); flash(view, '已載入示範資料'); });
   q('dv-clear').addEventListener('click', () => {
-    if (confirm('清空輸入並從共享持股資料移除？')) { q('dv-input').value = ''; setHoldings([]); renderOutput(view, []); flash(view, '已清空'); }
+    if (confirm('清空所有持股輸入並從共享資料移除？')) { state.rows = [blankRow(), blankRow(), blankRow()]; renderTable(view); flash(view, '已清空'); }
   });
 
-  renderOutput(view, existing.length ? parseCSV(prefill) : []);
+  renderTable(view);
+}
+
+function flash(view, msg) {
+  const m = view.querySelector('#dv-msg');
+  if (m) { m.textContent = msg; setTimeout(() => { if (m) m.textContent = ''; }, 2500); }
 }

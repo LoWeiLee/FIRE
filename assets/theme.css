@@ -251,6 +251,19 @@ textarea:focus{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-dim)}
 .dv-dev{font-family:var(--mono);white-space:nowrap;color:var(--txt2)}
 .dv-dev.hot{color:var(--gold-bright);font-weight:600}
 .dv-hotrow td{background:rgba(224,178,90,0.06)}
+/* 可編輯持股表格 */
+.dv-edit{width:100%;border-collapse:collapse;font-size:13px;min-width:560px}
+.dv-edit th{font-family:var(--mono);font-size:11px;letter-spacing:0.03em;text-transform:uppercase;color:var(--txt3);font-weight:500;text-align:left;padding:8px 8px;border-bottom:1px solid var(--line2);white-space:nowrap}
+.dv-edit th:nth-child(2),.dv-edit th:nth-child(3),.dv-edit th:nth-child(5){text-align:right}
+.dv-edit td{padding:5px 6px;border-bottom:1px solid var(--line);vertical-align:middle}
+.dv-edit td.num{text-align:right;font-family:var(--mono);color:var(--txt2);white-space:nowrap}
+.dv-edit input{padding:8px 9px;font-size:13.5px}
+.dv-edit input[type=number]{text-align:right}
+.dv-edit th:nth-child(1){width:88px}.dv-edit th:nth-child(2){width:110px}.dv-edit th:nth-child(3){width:74px}.dv-edit th:nth-child(5){width:64px}.dv-edit th:nth-child(6){width:34px}
+.dv-del{background:none;border:none;color:var(--txt3);cursor:pointer;font-size:18px;line-height:1;padding:4px 6px;border-radius:6px}
+.dv-del:hover{color:var(--bad);background:var(--bad-dim)}
+.dv-foot{padding:9px 8px;border-top:1px solid var(--line2);font-family:var(--mono);font-size:12.5px;color:var(--txt2);font-weight:500}
+.dv-sum.off{color:var(--bad)}
 
 /* ---------- 模組3：交易日誌 ---------- */
 .jr-bar2{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:20px}
