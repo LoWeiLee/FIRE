@@ -32,7 +32,8 @@ header{padding-bottom:18px;border-bottom:1px solid var(--line);margin-bottom:24p
 .field label{display:block;font-size:15px;color:var(--txt);margin-bottom:3px;font-weight:600}
 .field .sub{font-size:13px;color:var(--txt2);margin-bottom:9px;line-height:1.5}
 .inrow{display:flex;align-items:center;gap:10px}
-input[type=number],select,input[type=text]{width:100%;background:var(--ink2);border:1px solid var(--line2);color:var(--txt);font-family:var(--mono);font-size:16px;padding:11px 13px;border-radius:9px;outline:none;transition:.15s}
+input[type=number],select,input[type=text],input[type=date]{width:100%;background:var(--ink2);border:1px solid var(--line2);color:var(--txt);font-family:var(--mono);font-size:16px;padding:11px 13px;border-radius:9px;outline:none;transition:.15s}
+input[type=date]{color-scheme:dark}
 input:focus,select:focus{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-dim)}
 select{cursor:pointer;font-family:var(--sans);font-size:14.5px}
 optgroup{font-family:var(--sans);color:var(--gold-bright);background:var(--ink2);font-style:normal} option{color:var(--txt)}
@@ -274,3 +275,43 @@ textarea:focus{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-dim)}
 .jr-fill{height:100%;background:linear-gradient(90deg,rgba(224,178,90,0.5),var(--gold));border-radius:4px 0 0 4px}
 .jr-val{font-family:var(--mono);font-size:13px;color:var(--txt);white-space:nowrap;text-align:right;min-width:48px}
 @media(max-width:620px){.jr-row{grid-template-columns:90px 1fr auto;gap:8px}}
+
+/* ---------- 模組1：批次卡片 ---------- */
+.tr-cards{display:flex;flex-direction:column;gap:12px}
+.tr-card{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--line2);border-radius:12px;padding:15px 18px;transition:.15s}
+.tr-card.done{border-left-color:var(--gold);background:linear-gradient(90deg,var(--gold-dim),var(--panel) 55%)}
+.tr-card.insuf{border-left-color:var(--bad)}
+.tr-card-top{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:7px;flex-wrap:wrap}
+.tr-card-w{font-family:var(--mono);font-size:12px;color:var(--txt3);white-space:nowrap}
+.tr-card-main{font-size:15px;color:var(--txt);margin-bottom:5px}
+.tr-card-main b{font-family:var(--mono);font-size:21px;color:var(--gold-bright);font-weight:600;margin:0 2px}
+.tr-card.done .tr-card-main b{color:var(--txt2)}
+.tr-card-sub{font-size:12.5px;color:var(--txt3);font-family:var(--mono);margin-left:10px}
+.tr-card-trig{font-size:13px;color:var(--txt2);margin-bottom:9px;line-height:1.5}
+.tr-card-foot{display:flex;flex-wrap:wrap;gap:5px 16px;font-family:var(--mono);font-size:12.5px;color:var(--txt2);border-top:1px dashed var(--line);padding-top:9px}
+.tr-card-foot b{color:var(--txt);font-weight:600}
+
+/* ---------- 模組3：快速表單 / 明細表 ---------- */
+.jr-fg{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+.jr-fg label{display:block;font-size:12.5px;color:var(--txt2);margin-bottom:4px;font-weight:600}
+.jr-fg input,.jr-fg select{font-size:14px;padding:9px 11px}
+.jr-side{width:100%;display:flex}
+.jr-side button{flex:1;text-align:center}
+@media(max-width:420px){.jr-fg{grid-template-columns:1fr}}
+.jr-choicewrap{margin-bottom:14px}
+.jr-choicewrap>label{display:block;font-size:12.5px;color:var(--txt2);margin-bottom:6px;font-weight:600}
+.jr-choice{display:flex;gap:7px;flex-wrap:wrap}
+.jr-choice button{background:var(--ink2);border:1px solid var(--line2);color:var(--txt2);font-family:var(--mono);font-size:13px;padding:8px 13px;border-radius:9px;cursor:pointer;transition:.15s}
+.jr-choice button:hover{border-color:var(--gold);color:var(--gold-bright)}
+.jr-choice button.on{background:var(--gold-dim);border-color:var(--gold);color:var(--gold-bright)}
+.jr-detail{min-width:820px;font-size:13px}
+.jr-detail td.num{font-family:var(--mono)}
+.jr-buy{color:var(--ok);font-weight:600;white-space:nowrap}
+.jr-sell{color:var(--bad);font-weight:600;white-space:nowrap}
+.jr-act{white-space:nowrap;text-align:right}
+.jr-mini{background:var(--ink2);border:1px solid var(--line2);color:var(--txt2);font-family:var(--mono);font-size:12px;padding:5px 10px;border-radius:7px;cursor:pointer;transition:.15s;margin-left:6px}
+.jr-mini:hover{border-color:var(--gold);color:var(--gold-bright)}
+.jr-mini.danger:hover{border-color:var(--bad);color:var(--bad)}
+.jr-editrow td{background:var(--gold-dim)}
+.jr-editrow input,.jr-editrow select{font-size:12.5px;padding:6px 8px;min-width:64px}
+.jr-editrow input[type=date]{min-width:130px}

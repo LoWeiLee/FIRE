@@ -92,6 +92,7 @@ function renderResults(view) {
   const low = s.cash.low, high = s.cash.high;
   const box = view.querySelector('#tr-results');
   if (!box) return;
+  const detailsOpen = !!box.querySelector('details.adv[open]'); // 重繪前記住折疊狀態
 
   const targetLine = r.T > 0
     ? `目標配置金額 <b>${fmt(r.T)}</b>` + (state.targetMode === 'pct' ? `（組合 ${fmt1(state.targetPct)}% × 總值 ${fmt(state.portfolioTotal)}）` : '')
@@ -100,17 +101,40 @@ function renderResults(view) {
   const weightWarn = Math.abs(r.weightSum - 100) > 0.01
     ? `<span class="tr-warn">各批比重合計 ${fmt1(r.weightSum)}%（非 100%，已按填入比重計算）</span>` : '';
 
+  const lampOf = pct => {
+    if (pct == null) return '';
+    const kind = pct < low ? 'bad' : (pct > high ? 'warn' : 'ok');
+    const txt = pct < low ? '低於下緣' : (pct > high ? '高於上緣' : '區間內');
+    return `<span class="lamp lamp-${kind}" title="現金舒適區間 ${low}–${high}%">${fmt1(pct)}% · ${txt}</span>`;
+  };
+
+  // 批次卡片：把「這批該買幾股、花多少錢」放在第一眼
+  const cards = r.rows.map(row => {
+    const cls = 'tr-card' + (row.executed ? ' done' : '') + (row.insufficient ? ' insuf' : '');
+    const insuf = row.insufficient ? `<span class="tr-bad">現金不足</span>` : '';
+    return `<div class="${cls}">
+      <div class="tr-card-top">
+        <label class="tr-exec"><input type="checkbox" data-exec="${row.i}" ${row.executed ? 'checked' : ''}>第 ${row.i + 1} 批${row.executed ? '（已執行）' : ''}</label>
+        <span class="tr-card-w">比重 ${fmt1(row.weight)}%</span>
+      </div>
+      <div class="tr-card-main">買 <b>${fmt(row.shares)}</b> 股 ≈ <b>${fmt(row.actual)}</b><span class="tr-card-sub">目標金額 ${fmt(row.amount)}</span></div>
+      <div class="tr-card-trig">${row.trigger ? '觸發：' + esc(row.trigger) : '<span class="tr-muted">未設觸發條件</span>'}</div>
+      <div class="tr-card-foot">
+        <span>執行後累計 <b>${fmt(row.cumShares)}</b> 股</span>
+        <span>已投入 ${fmt(row.cumInvested)}</span>
+        <span>剩餘現金 ${fmt(row.remaining)} ${insuf}</span>
+        ${row.remainingPct != null ? `<span>${lampOf(row.remainingPct)}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  // 明細表（折疊保留）
   const rows = r.rows.map(row => {
     const exClass = row.executed ? ' tr-done' : '';
     const insuf = row.insufficient ? `<span class="tr-bad">現金不足</span>` : '';
-    let pctCell = '—';
-    if (row.remainingPct != null) {
-      const lamp = row.remainingPct < low ? 'bad' : (row.remainingPct > high ? 'warn' : 'ok');
-      const lampTxt = row.remainingPct < low ? '低於下緣' : (row.remainingPct > high ? '高於上緣' : '區間內');
-      pctCell = `<span class="lamp lamp-${lamp}" title="現金舒適區間 ${low}–${high}%">${fmt1(row.remainingPct)}% · ${lampTxt}</span>`;
-    }
+    const pctCell = row.remainingPct != null ? lampOf(row.remainingPct) : '—';
     return `<tr class="${exClass}">
-      <td><label class="tr-exec"><input type="checkbox" data-exec="${row.i}" ${row.executed ? 'checked' : ''}>第 ${row.i + 1} 批</label></td>
+      <td>第 ${row.i + 1} 批</td>
       <td class="tr-trig">${row.trigger ? esc(row.trigger) : '<span class="tr-muted">—</span>'}</td>
       <td class="num">${fmt1(row.weight)}%</td>
       <td class="num">${fmt(row.amount)}</td>
@@ -135,15 +159,21 @@ function renderResults(view) {
     <div class="zone">
       <div class="q">建倉計畫</div>
       <div class="pnote" style="margin-bottom:14px">${targetLine} ${weightWarn}</div>
-      <div class="tr-tablewrap">
-        <table class="tr-table">
-          <thead><tr>
-            <th>批次</th><th>觸發條件</th><th>比重</th><th>目標金額</th><th>股數</th>
-            <th>實際金額</th><th>累計持股</th><th>累計投入</th><th>剩餘現金</th><th>剩餘現金佔組合</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
+      <div class="tr-cards">${cards}</div>
+      <details class="adv" style="margin-top:14px">
+        <summary>詳細表格（逐批完整數字）</summary>
+        <div class="advbody">
+          <div class="tr-tablewrap" style="margin-top:14px">
+            <table class="tr-table">
+              <thead><tr>
+                <th>批次</th><th>觸發條件</th><th>比重</th><th>目標金額</th><th>股數</th>
+                <th>實際金額</th><th>累計持股</th><th>累計投入</th><th>剩餘現金</th><th>剩餘現金佔組合</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>
+      </details>
     </div>
 
     <div class="zone">
@@ -160,6 +190,8 @@ function renderResults(view) {
       <div class="q">資金分布</div>
       <div class="panel">${stackedBar(r)}</div>
     </div>`;
+
+  if (detailsOpen) { const d = box.querySelector('details.adv'); if (d) d.open = true; }
 
   box.querySelectorAll('[data-exec]').forEach(cb => cb.addEventListener('change', () => {
     state.batches[+cb.dataset.exec].executed = cb.checked;

@@ -254,6 +254,49 @@ function syncDerived(view) {
 
 function blankRow() { return { ticker: '', value: '', target: '', layer: '' }; }
 
+/* ---------- 整批貼上解析（Excel / Sheets / CSV，Tab 或逗號分隔） ---------- */
+function parsePaste(text) {
+  const lines = String(text || '').trim().split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const out = [];
+  lines.forEach(l => {
+    const c = l.split(/\t|,/).map(x => x.trim());
+    if (c.length < 2) return;
+    const ticker = c[0];
+    const value = parseFloat(String(c[1]).replace(/[,\s]/g, ''));
+    if (!ticker || isNaN(value)) return; // 表頭列（現值非數字）自動跳過
+    const target = c[2] !== undefined && c[2] !== '' ? (parseFloat(String(c[2]).replace(/[%\s]/g, '')) || 0) : '';
+    out.push({ ticker, value, target, layer: c[3] || '' });
+  });
+  return out;
+}
+
+function applyPaste(view, mode) {
+  const ta = view.querySelector('#dv-paste');
+  const incoming = parsePaste(ta.value);
+  if (!incoming.length) { flash(view, '沒有可解析的持股列（欄位順序：代號、現值、目標%、分類）'); return; }
+  if (mode === 'replace') {
+    state.rows = incoming;
+  } else {
+    // 合併：同代號覆蓋（大小寫不敏感），新代號附加
+    incoming.forEach(inc => {
+      const idx = state.rows.findIndex(r => String(r.ticker).trim().toUpperCase() === inc.ticker.toUpperCase() && String(r.ticker).trim() !== '');
+      if (idx >= 0) {
+        state.rows[idx].value = inc.value;
+        if (inc.target !== '') state.rows[idx].target = inc.target;
+        if (inc.layer) state.rows[idx].layer = inc.layer;
+      } else {
+        state.rows.push({ ...inc });
+      }
+    });
+    // 清掉純空白列
+    state.rows = state.rows.filter(r => String(r.ticker || '').trim() || r.value || r.target || r.layer);
+    if (!state.rows.length) state.rows.push(blankRow());
+  }
+  ta.value = '';
+  renderTable(view);
+  flash(view, `已${mode === 'replace' ? '取代為' : '併入'} ${incoming.length} 檔 ✓`);
+}
+
 export function mount(view) {
   const existing = getHoldings();
   state = { rows: existing.length ? existing.map(r => ({ ticker: r.ticker, value: r.value, target: r.target, layer: r.layer })) : [blankRow(), blankRow(), blankRow()] };
@@ -293,6 +336,18 @@ export function mount(view) {
             <span class="savemsg" id="dv-msg"></span>
           </div>
         </div>
+
+        <details class="adv" style="margin-top:18px">
+          <summary>整批貼上（Excel / Sheets / CSV）</summary>
+          <div class="advbody">
+            <div class="sub" style="margin:14px 0 10px">從試算表直接複製整個範圍貼進來即可。欄位順序：代號、現值、目標%（選填）、分類層級（選填）。Tab 或逗號分隔，表頭列會自動跳過。現金請用代號「現金」或 CASH。</div>
+            <textarea id="dv-paste" rows="6" placeholder="NVDA&#9;1800000&#9;20&#9;半導體 / 算力&#10;TSM&#9;1200000&#9;12&#9;設備 / 製造&#10;現金&#9;1100000&#9;8&#9;現金"></textarea>
+            <div class="savebar" style="margin-top:12px">
+              <button class="btn-primary" id="dv-paste-merge" type="button">併入現有（同代號覆蓋）</button>
+              <button class="btn-ghost" id="dv-paste-replace" type="button">取代全部</button>
+            </div>
+          </div>
+        </details>
       </div>
 
       <div class="results" id="dv-out"></div>
@@ -306,6 +361,8 @@ export function mount(view) {
     renderTable(view);
   });
   q('dv-demo').addEventListener('click', () => { state.rows = DEMO_ROWS.map(r => ({ ...r })); renderTable(view); flash(view, '已載入示範資料'); });
+  q('dv-paste-merge').addEventListener('click', () => applyPaste(view, 'merge'));
+  q('dv-paste-replace').addEventListener('click', () => applyPaste(view, 'replace'));
   q('dv-clear').addEventListener('click', () => {
     if (confirm('清空所有持股輸入並從共享資料移除？')) { state.rows = [blankRow(), blankRow(), blankRow()]; renderTable(view); flash(view, '已清空'); }
   });
