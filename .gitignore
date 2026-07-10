@@ -10,3 +10,7 @@ Thumbs.db
 
 # Node（若日後本機用到工具，產物不上傳）
 node_modules/
+
+# 本機維運腳本與診斷檔（含本機路徑，絕不上傳）
+*.bat
+git_diag.txt
