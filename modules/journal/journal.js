@@ -8,6 +8,7 @@
    - 可匯出 journal 專屬 CSV、可清空
    ============================================================ */
 import { get, set } from '../../core/store.js';
+import { confirmModal, showModal, flowCrumb } from '../../core/ui.js';
 
 export const id = 'journal';
 export const title = '交易日誌';
@@ -15,15 +16,15 @@ export const title = '交易日誌';
 const JOURNAL_KEY = 'journal';
 const DAY = 86400000;
 
-const DEMO = `日期,代號,買/賣,股數,價格,賣出類型,決策評分,三層判讀完整度
-2025-08-15,NVDA,買,100,110,,✅,3
-2025-09-10,AVGO,買,50,160,,⚠️,2
-2025-11-20,NVDA,賣,40,140,停利,✅,3
-2026-01-12,TSM,買,80,190,,✅,2
-2026-02-03,NVDA,買,30,130,,❌,1
-2026-02-20,NVDA,賣,30,125,停損,⚠️,1
-2026-03-05,MSFT,買,60,420,,✅,3
-2026-05-10,PLTR,買,100,30,,⚠️,0`;
+const DEMO = `日期,代號,買/賣,股數,價格,賣出類型,決策評分,三層判讀完整度,決策備註
+2025-08-15,NVDA,買,100,110,,✅,3,故事完整、技術面右側訊號
+2025-09-10,AVGO,買,50,160,,⚠️,2,
+2025-11-20,NVDA,賣,40,140,停利,✅,3,達強檢視觸發點後減碼
+2026-01-12,TSM,買,80,190,,✅,2,
+2026-02-03,NVDA,買,30,130,,❌,1,追high 沒走完判讀
+2026-02-20,NVDA,賣,30,125,停損,⚠️,1,
+2026-03-05,MSFT,買,60,420,,✅,3,
+2026-05-10,PLTR,買,100,30,,⚠️,0,`;
 
 let uiMode = 'quarter'; // 'quarter' | 'year'
 let uiPeriod = '__latest__';
@@ -62,10 +63,29 @@ function normDate(s) {
 }
 
 /* ---------- 解析 ---------- */
+/* 引號感知的欄位切分：備註可含逗號（以 "..." 包住），"" 為跳脫的引號 */
+function splitLine(l) {
+  const out = []; let cur = ''; let q = false;
+  for (let i = 0; i < l.length; i++) {
+    const ch = l[i];
+    if (q) {
+      if (ch === '"') { if (l[i + 1] === '"') { cur += '"'; i++; } else q = false; }
+      else cur += ch;
+    } else if (ch === '"') q = true;
+    else if (ch === ',' || ch === '\t') { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out.map(c => c.trim());
+}
+function csvField(v) {
+  v = String(v == null ? '' : v);
+  return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+}
 function parseCSV(text) {
   const lines = text.trim().split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   if (!lines.length) return [];
-  let rows = lines.map(l => l.split(/\t|,/).map(c => c.trim()));
+  let rows = lines.map(splitLine);
   // 偵測表頭：第一列無法解析為日期 → 表頭
   if (rows.length && !normDate(rows[0][0])) rows = rows.slice(1);
   const out = [];
@@ -80,6 +100,7 @@ function parseCSV(text) {
     out.push({
       date: dt.date, ticker: c[1].trim().toUpperCase(), side, shares, price,
       sellType: (c[5] || '').trim(), score: normScore(c[6]), depth,
+      note: (c[8] || '').trim(),
     });
   });
   return out;
@@ -224,6 +245,7 @@ function renderPanel(view) {
         <td><input type="text" id="jr-e-selltype" value="${esc(t.sellType || '')}" list="jr-selltypes" placeholder="—"></td>
         <td><select id="jr-e-score"><option value=""${!t.score ? ' selected' : ''}>未評</option><option value="✅"${t.score === '✅' ? ' selected' : ''}>✅</option><option value="⚠️"${t.score === '⚠️' ? ' selected' : ''}>⚠️</option><option value="❌"${t.score === '❌' ? ' selected' : ''}>❌</option></select></td>
         <td><select id="jr-e-depth"><option value=""${t.depth == null ? ' selected' : ''}>—</option>${[0, 1, 2, 3].map(d => `<option value="${d}"${t.depth === d ? ' selected' : ''}>${d}</option>`).join('')}</select></td>
+        <td><input type="text" id="jr-e-note" value="${esc(t.note || '')}" placeholder="備註"></td>
         <td class="jr-act"><button class="jr-mini" id="jr-e-save" type="button">儲存</button><button class="jr-mini" id="jr-e-cancel" type="button">取消</button></td>
       </tr>`;
     }
@@ -237,6 +259,7 @@ function renderPanel(view) {
       <td>${t.sellType ? esc(t.sellType) : '<span class="tr-muted">—</span>'}</td>
       <td>${t.score || '<span class="tr-muted">—</span>'}</td>
       <td class="num">${t.depth == null ? '<span class="tr-muted">—</span>' : t.depth}</td>
+      <td class="jr-note" title="${esc(t.note || '')}">${t.note ? esc(t.note) : '<span class="tr-muted">—</span>'}</td>
       <td class="jr-act"><button class="jr-mini" data-edit="${i}" type="button">編輯</button><button class="jr-mini danger" data-delrow="${i}" type="button">刪除</button></td>
     </tr>`;
   }).join('');
@@ -264,32 +287,14 @@ function renderPanel(view) {
       <div class="q">交易明細（${scopeIdx.length} 筆${shown.length < scopeIdx.length ? `，顯示最近 ${shown.length} 筆，切換期間可縮小範圍` : ''}）</div>
       <div class="tr-tablewrap">
         <table class="tr-table jr-detail">
-          <thead><tr><th>日期</th><th>代號</th><th>買/賣</th><th>股數</th><th>價格</th><th>金額</th><th>賣出類型</th><th>評分</th><th>完整度</th><th></th></tr></thead>
+          <thead><tr><th>日期</th><th>代號</th><th>買/賣</th><th>股數</th><th>價格</th><th>金額</th><th>賣出類型</th><th>評分</th><th>完整度</th><th>備註</th><th></th></tr></thead>
           <tbody>${detailRows}</tbody>
         </table>
       </div>
     </div>
 
     <div class="zone">
-      <div class="q">買賣分布</div>
-      ${distBars([
-        { label: '買進', count: buys.length, sub: fmt(amt(buys)) },
-        { label: '賣出', count: sells.length, sub: fmt(amt(sells)) },
-      ])}
-    </div>
-
-    <div class="zone">
-      <div class="q">賣出類型分布</div>
-      ${sells.length ? distBars(sellTypeEntries) : '<div class="chartnote">此期間沒有賣出交易。</div>'}
-    </div>
-
-    <div class="zone">
-      <div class="q">決策評分分布</div>
-      ${distBars(scoreEntries)}
-    </div>
-
-    <div class="zone">
-      <div class="q">三層判讀完整度趨勢（跨各期）</div>
+      <div class="q">三層判讀完整度趨勢（跨各期，回饋迴路核心）</div>
       <div class="panel">${trendSVG(all, uiMode)}</div>
     </div>
 
@@ -299,6 +304,24 @@ function renderPanel(view) {
         ? `<div class="lampgrid">` + reps.map(r => `<div class="lampcard warn"><div class="lc-k">${esc(r.ticker)}</div><div class="lc-v">${r.count} 次</div><div class="lc-x">30 天窗內${r.span ? `（${r.span[0]} ~ ${r.span[1]}）` : ''}有多次進出</div></div>`).join('') + `</div>`
         : '<div class="chartnote">此期間沒有單一標的在 30 天內重複交易。</div>'}
       <div class="chartnote">依目前選取期間計算。觀察短期內的重複進出，留意是否情緒性交易。</div>
+    </div>
+
+    <div class="zone">
+      <div class="q">決策評分分布</div>
+      ${distBars(scoreEntries)}
+    </div>
+
+    <div class="zone">
+      <div class="q">賣出類型分布</div>
+      ${sells.length ? distBars(sellTypeEntries) : '<div class="chartnote">此期間沒有賣出交易。</div>'}
+    </div>
+
+    <div class="zone">
+      <div class="q">買賣分布</div>
+      ${distBars([
+        { label: '買進', count: buys.length, sub: fmt(amt(buys)) },
+        { label: '賣出', count: sells.length, sub: fmt(amt(sells)) },
+      ])}
     </div>`;
 
   view.querySelector('#jr-mode-q').addEventListener('click', () => { uiMode = 'quarter'; uiPeriod = '__latest__'; editIdx = null; renderPanel(view); });
@@ -307,11 +330,11 @@ function renderPanel(view) {
 
   // 明細表：單筆編輯 / 刪除
   box.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => { editIdx = +b.dataset.edit; renderPanel(view); }));
-  box.querySelectorAll('[data-delrow]').forEach(b => b.addEventListener('click', () => {
+  box.querySelectorAll('[data-delrow]').forEach(b => b.addEventListener('click', async () => {
     const i = +b.dataset.delrow;
     const t = all[i];
     if (!t) return;
-    if (confirm(`刪除 ${t.date} ${t.ticker} ${t.side === 'buy' ? '買' : '賣'} ${t.shares} 股 這筆紀錄？`)) {
+    if (await confirmModal(`刪除 ${t.date} ${t.ticker} ${t.side === 'buy' ? '買' : '賣'} ${t.shares} 股 這筆紀錄？`, { danger: true, okLabel: '刪除' })) {
       const next = all.slice(); next.splice(i, 1);
       set(JOURNAL_KEY, next);
       editIdx = null;
@@ -334,6 +357,7 @@ function renderPanel(view) {
         date: dt.date, ticker, side: g('jr-e-side').value, shares, price,
         sellType: g('jr-e-side').value === 'sell' ? g('jr-e-selltype').value.trim() : '',
         score: g('jr-e-score').value, depth: dvRaw === '' ? null : Math.max(0, Math.min(3, +dvRaw)),
+        note: g('jr-e-note').value.trim(),
       };
       next.sort((a, b) => a.date.localeCompare(b.date));
       set(JOURNAL_KEY, next);
@@ -361,8 +385,8 @@ function doParse(view) {
 function exportCSV(view) {
   const all = get(JOURNAL_KEY, []);
   if (!all.length) { flash(view, '目前沒有交易可匯出'); return; }
-  const header = '日期,代號,買/賣,股數,價格,賣出類型,決策評分,三層判讀完整度';
-  const body = all.map(t => [t.date, t.ticker, t.side === 'buy' ? '買' : '賣', t.shares, t.price, t.sellType || '', t.score || '', t.depth == null ? '' : t.depth].join(',')).join('\n');
+  const header = '日期,代號,買/賣,股數,價格,賣出類型,決策評分,三層判讀完整度,決策備註';
+  const body = all.map(t => [t.date, t.ticker, t.side === 'buy' ? '買' : '賣', t.shares, t.price, csvField(t.sellType || ''), t.score || '', t.depth == null ? '' : t.depth, csvField(t.note || '')].join(',')).join('\n');
   const blob = new Blob([header + '\n' + body], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -372,7 +396,10 @@ function exportCSV(view) {
 
 function flash(view, msg) {
   const m = view.querySelector('#jr-msg');
-  if (m) { m.textContent = msg; setTimeout(() => { if (m) m.textContent = ''; }, 3000); }
+  if (!m) return;
+  m.textContent = msg;
+  clearTimeout(m._t);
+  m._t = setTimeout(() => { m.textContent = ''; }, 3000);
 }
 
 /* ---------- 單筆快速表單 ---------- */
@@ -411,6 +438,7 @@ function addTrade(view) {
     date: dt.date, ticker, side: form.side, shares, price,
     sellType: form.side === 'sell' ? q('jr-f-selltype').value : '',
     score: form.score, depth: form.depth,
+    note: q('jr-f-note').value.trim(),
   };
   const { merged, added } = mergeDedup(get(JOURNAL_KEY, []), [t]);
   if (!added) { flash(view, '這筆與既有紀錄完全相同，未新增'); return; }
@@ -418,7 +446,7 @@ function addTrade(view) {
   uiPeriod = '__latest__'; editIdx = null;
   // 保留日期與買賣方向，清掉其餘欄位方便連續輸入
   q('jr-f-ticker').value = ''; q('jr-f-shares').value = ''; q('jr-f-price').value = '';
-  q('jr-f-selltype').value = '';
+  q('jr-f-selltype').value = ''; q('jr-f-note').value = '';
   form.score = ''; form.depth = null;
   resetChoice(view, 'jr-f-score'); resetChoice(view, 'jr-f-depth');
   renderPanel(view);
@@ -434,6 +462,7 @@ export function mount(view) {
       <h1>交易日誌統計</h1>
       <p>把每筆買賣記下來，工具幫你看回去：買賣分布、賣出類型、決策評分、三層判讀完整度的變化趨勢，以及短期內反覆進出的標的。資料只存在你的瀏覽器、可持續累加，是回看自己決策品質的鏡子。</p>
     </div></header>
+    ${flowCrumb('journal')}
 
     <datalist id="jr-selltypes">${SELL_TYPES.map(t => `<option value="${t}">`).join('')}</datalist>
 
@@ -458,6 +487,9 @@ export function mount(view) {
             <div class="jr-choice" id="jr-f-depth">
               <button data-v="" class="on" type="button">未填</button><button data-v="0" type="button">0</button><button data-v="1" type="button">1</button><button data-v="2" type="button">2</button><button data-v="3" type="button">3</button>
             </div>
+          </div>
+          <div class="jr-choicewrap"><label>決策備註（選填，一句話記下為什麼）</label>
+            <input type="text" id="jr-f-note" placeholder="例：達強檢視觸發點後減碼 / 財報後故事仍完整">
           </div>
           <div class="savebar" style="margin-top:18px">
             <button class="btn-primary" id="jr-add" type="button">新增這筆</button>
@@ -495,8 +527,19 @@ export function mount(view) {
   q('jr-parse').addEventListener('click', () => doParse(view));
   q('jr-demo').addEventListener('click', () => { q('jr-input').value = DEMO; doParse(view); });
   q('jr-export').addEventListener('click', () => exportCSV(view));
-  q('jr-clear').addEventListener('click', () => {
-    if (confirm('清空所有交易日誌？此動作無法復原，建議先匯出 CSV 備份。')) { set(JOURNAL_KEY, []); uiPeriod = '__latest__'; editIdx = null; renderPanel(view); flash(view, '已清空'); }
+  q('jr-clear').addEventListener('click', async () => {
+    const choice = await showModal({
+      title: '清空交易日誌',
+      body: '此動作無法復原。要先匯出一份 CSV 備份嗎？',
+      buttons: [
+        { label: '匯出 CSV 並清空', kind: 'primary', value: 'backup' },
+        { label: '直接清空', kind: 'danger', value: 'clear' },
+        { label: '取消', kind: 'ghost', value: null },
+      ],
+    });
+    if (!choice) return;
+    if (choice === 'backup') exportCSV(view);
+    set(JOURNAL_KEY, []); uiPeriod = '__latest__'; editIdx = null; renderPanel(view); flash(view, '已清空');
   });
 
   renderPanel(view);

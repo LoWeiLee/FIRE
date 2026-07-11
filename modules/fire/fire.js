@@ -7,8 +7,14 @@
      3) resize 監聽器於 unmount 時移除，避免切換模組後殘留
    ============================================================ */
 
+import { get, set, portfolioTotal } from '../../core/store.js';
+import { confirmModal, alertModal } from '../../core/ui.js';
+
 export const id = 'fire';
 export const title = 'FIRE 試算';
+
+const FIRE_STATE_KEY = 'fireInputs';    // 輸入自動記憶
+const FIRE_SC_KEY = 'fireScenarios';    // 具名方案
 
 const FIRE_HTML = `
   <header>
@@ -29,8 +35,8 @@ const FIRE_HTML = `
         </div>
         <div class="field">
           <label>現在手上有多少投資本金</label>
-          <div class="sub">還沒開始也沒關係，填 0。</div>
-          <input type="number" id="startCap" value="1000000" step="100000" min="0">
+          <div class="sub">還沒開始也沒關係，填 0。也可以直接帶入「組合偏離」的持股總值。</div>
+          <div class="inrow"><input type="number" id="startCap" value="1000000" step="100000" min="0"><button class="btn-ghost" id="pullCap" type="button" style="white-space:nowrap">帶入持股</button></div>
         </div>
         <div class="field">
           <label>每個月能投入多少</label>
@@ -104,6 +110,21 @@ const FIRE_HTML = `
           </div>
         </div>
       </details>
+
+      <div class="panel" style="margin-top:18px">
+        <div class="seclabel">方案管理</div>
+        <div class="field">
+          <label>方案名稱</label>
+          <div class="sub">把整組輸入（含進階設定、現金流、策略參數）存成一個方案，之後一鍵切換比較。輸入值也會自動記住，下次打開接續上次設定。</div>
+          <input type="text" id="scName" placeholder="例：基準方案 / 50 歲提早退 / 保守版">
+        </div>
+        <div class="savebar" style="margin-bottom:14px">
+          <button class="btn-primary" id="scSave" type="button">儲存方案</button>
+          <span class="savemsg" id="scMsg"></span>
+        </div>
+        <div class="tagrow" id="scChips"></div>
+        <button class="btn-ghost" id="scCompareBtn" type="button" style="margin-top:14px;width:100%">並排比較所有方案</button>
+      </div>
     </div>
 
     <div class="results">
@@ -167,6 +188,15 @@ const FIRE_HTML = `
         </div>
       </div>
 
+
+      <div class="zone" id="scCompareZone" style="display:none">
+        <div class="q">方案並排比較</div>
+        <div class="modebar" style="margin-bottom:14px">
+          <div class="seg"><button id="scCmCurrent" class="on">統一為目前模式</button><button id="scCmOwn">沿用各方案模式</button></div>
+          <span class="modenote">把已儲存的方案（加上目前螢幕上的輸入）放在一起比。綠色是各欄最佳值。</span>
+        </div>
+        <div id="scCompare"></div>
+      </div>
 
       <div class="foot">
         <b>怎麼看這張圖</b>　每一條線是一個歷史起點。左半藍色是你在存錢、資產往上爬，右半金色是你退休後在花錢，中間那條直線是退休的那一刻，水平虛線是你的自由數字。哪條線跌到 0，就代表那段歷史在計畫結束前把錢花光了。
@@ -459,6 +489,7 @@ function render(){
   ];
   $('statgrid').innerHTML=stats.map(c=>`<div class="stat"><div class="k">${c.k}</div><div class="v">${c.v}</div><div class="x">${c.x}</div></div>`).join('');
   drawCharts();
+  set(FIRE_STATE_KEY, captureState()); // 輸入自動記憶
 }
 
 function renderTradeoffs(cfg,acc,FI,baseN,R){
@@ -529,6 +560,119 @@ function setMode(m){MODE=m;$('modeHist').classList.toggle('on',m==='hist');$('mo
   $('modenote').textContent=(m==='mc')?'從真實歷史隨機抽取連續 8 年區塊，組成 800 條沒真正走過的人生路徑。這是模擬，依賴抽樣假設。':'你的計畫走過 1871 年以來每一段真實市場歷史。';
   render();}
 
+/* ---------- 輸入持久化與方案管理 ---------- */
+const escT=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const STATE_IDS=['age','startCap','monthly','spend','safeRate','fee','targetAge','length','alStocks','alBonds','alStocksPost','alBondsPost'];
+function captureState(){
+  const s={v:{},cur:$('cur').value,manualAge:$('manualAge').checked,strat:$('strat').value,mode:MODE,sp:{},
+    flows:flowState.map(f=>({name:f.name,type:f.type,amount:f.amount,start:f.start,end:f.end,infl:f.infl}))};
+  STATE_IDS.forEach(id=>s.v[id]=$(id).value);
+  $('stratParams').querySelectorAll('input[data-pk]').forEach(i=>s.sp[i.dataset.pk]=i.value);
+  return s;
+}
+function applyState(s){
+  if(!s)return;
+  STATE_IDS.forEach(id=>{if(s.v&&s.v[id]!=null&&s.v[id]!=='')$(id).value=s.v[id];});
+  if(s.cur)$('cur').value=s.cur;
+  $('manualAge').checked=!!s.manualAge;
+  $('targetAgeRow').style.display=s.manualAge?'flex':'none';
+  if(s.strat&&STRATS[s.strat])$('strat').value=s.strat;
+  renderStratParams();
+  if(s.sp)$('stratParams').querySelectorAll('input[data-pk]').forEach(i=>{if(s.sp[i.dataset.pk]!=null)i.value=s.sp[i.dataset.pk];});
+  flowState.length=0;$('flows').innerHTML='';
+  (s.flows||[]).forEach(f=>addFlow({name:f.name||'',type:f.type||'income',amount:f.amount||0,start:f.start||1,end:f.end||1,infl:f.infl!==false}));
+  syncAlloc();
+  $('lenVal').textContent=$('length').value+' 年';
+  setMode(s.mode==='mc'?'mc':'hist'); // 內含 render
+}
+/* 從存檔狀態（非 DOM）建 cfg，供並排比較各方案獨立計算 */
+function allocFromVals(sv,bv){let ws=parseInt(sv)/100,wb=parseInt(bv)/100;if(isNaN(ws))ws=0;if(isNaN(wb))wb=0;if(ws+wb>1)wb=1-ws;const wc=Math.max(0,1-ws-wb);return {ws,wb,wc};}
+function configFromState(s){
+  const v=s.v||{};
+  const strat=(s.strat&&STRATS[s.strat])?s.strat:'constdollar';
+  const def=STRATS[strat];const sp={};
+  (def.params||[]).forEach(pr=>{let x=parseFloat((s.sp||{})[pr.k]);if(isNaN(x))x=pr.def;sp[pr.k]=pr.raw?x:x/100;});
+  const pre=allocFromVals(v.alStocks,v.alBonds),post=allocFromVals(v.alStocksPost,v.alBondsPost);
+  const flows=(s.flows||[]).map(f=>({type:f.type,amount:Math.max(0,f.amount||0),start:Math.max(1,Math.round(f.start||1)),end:Math.max(1,Math.round(f.end||1)),inflationAdj:f.infl!==false}));
+  return {age:parseInt(v.age)||0,startCap:Math.max(0,parseFloat(v.startCap)||0),
+    annualContrib:Math.max(0,(parseFloat(v.monthly)||0)*12),
+    spending:Math.max(0,parseFloat(v.spend)||0),safeRate:Math.max(0.01,(parseFloat(v.safeRate)||4)/100),
+    length:parseInt(v.length)||30,manualAge:!!s.manualAge,targetAge:parseInt(v.targetAge)||65,
+    ws:pre.ws,wb:pre.wb,wc:pre.wc,wsPost:post.ws,wbPost:post.wb,wcPost:post.wc,
+    fee:(parseFloat(v.fee)||0)/100,flows,strat,sp,fn:def.fn,cur:s.cur||'NT$'};
+}
+function summarizeState(s,forceMode){
+  const prev=MODE;MODE=forceMode||(s.mode==='mc'?'mc':'hist');
+  try{
+    const cfg=configFromState(s);
+    const acc=accumSeriesMode(cfg,0);const FI=cfg.spending/cfg.safeRate;
+    const solvedN=yearsTo(acc.med,FI);
+    let N,reachable;
+    if(cfg.manualAge){N=Math.max(0,cfg.targetAge-cfg.age);reachable=acc.med[Math.min(N,SCAN_CAP)]>=FI;}
+    else{reachable=solvedN!=null;N=reachable?solvedN:SCAN_CAP;}
+    cfg.accumYears=N;
+    const R=runMode(cfg);
+    return {cur:cfg.cur,mode:MODE,manualAge:cfg.manualAge,reachable,
+      fage:(cfg.manualAge||reachable)?cfg.age+N:null,
+      sr:R.n?R.sr:null,FI,atRmed:R.n?pctile(R.atR,0.5):null,
+      monthly:cfg.annualContrib/12,spending:cfg.spending};
+  }finally{MODE=prev;}
+}
+let compareMode='current',compareVisible=false;
+function renderCompare(){
+  const list=get(FIRE_SC_KEY,[]);
+  const box=$('scCompare');if(!box)return;
+  const force=compareMode==='current'?MODE:undefined;
+  const rows=[{name:'目前輸入',cur:true,sum:summarizeState(captureState(),force)}];
+  list.forEach(p=>rows.push({name:p.name,cur:false,sum:summarizeState(p.state,force)}));
+  const ages=rows.map(r=>r.sum.fage).filter(v=>v!=null);const bestAge=ages.length?Math.min(...ages):null;
+  const srs=rows.map(r=>r.sum.sr).filter(v=>v!=null);const bestSr=srs.length?Math.max(...srs):null;
+  const atrs=rows.map(r=>r.sum.atRmed).filter(v=>v!=null);const bestAtr=atrs.length?Math.max(...atrs):null;
+  const modeLabel=m=>m==='mc'?'蒙地卡羅':'歷史';
+  let star=false;
+  const bodyRows=rows.map(r=>{const u=r.sum;
+    if(u.fage!=null&&!u.reachable&&u.manualAge)star=true;
+    const ageCell=u.fage!=null?`${u.fage} 歲${!u.reachable&&u.manualAge?' *':''}`:'60 年內未達';
+    return `<tr class="${r.cur?'sc-cur':''}">
+      <td class="sc-name">${escT(r.name)}${r.cur?' <span class="tr-muted">(未存)</span>':''}</td>
+      <td>${modeLabel(u.mode)}</td>
+      <td class="num${u.fage!=null&&u.fage===bestAge?' sc-best':''}">${ageCell}</td>
+      <td class="num${u.sr!=null&&u.sr===bestSr?' sc-best':''}">${u.sr!=null?u.sr.toFixed(0)+'%':'—'}</td>
+      <td class="num">${fmtCompact(u.FI,u.cur)}</td>
+      <td class="num${u.atRmed!=null&&u.atRmed===bestAtr?' sc-best':''}">${u.atRmed!=null?fmtCompact(u.atRmed,u.cur):'—'}</td>
+      <td class="num">${fmtCompact(u.monthly,u.cur)}</td>
+      <td class="num">${fmtCompact(u.spending,u.cur)}</td>
+    </tr>`;}).join('');
+  box.innerHTML=`<div class="tr-tablewrap"><table class="tr-table sc-table">
+    <thead><tr><th>方案</th><th>模式</th><th>退休年齡</th><th>成功率</th><th>自由數字</th><th>退休時資產</th><th>每月投入</th><th>退休年支出</th></tr></thead>
+    <tbody>${bodyRows}</tbody></table></div>
+    <div class="chartnote">綠色為各欄最佳（退休最早、成功率最高、退休時資產最多）。${star?'標「*」＝手動指定的退休年齡，但屆時中位數資產尚未達自由數字。':''}${compareMode==='current'?`目前統一以「${modeLabel(MODE)}」計算，數字可直接比較。`:'各方案沿用儲存時的模式（見模式欄），跨模式比較僅供參考。'}</div>`;
+  $('scCmCurrent').classList.toggle('on',compareMode==='current');
+  $('scCmOwn').classList.toggle('on',compareMode==='own');
+  $('scCompareZone').style.display='';
+  compareVisible=true;
+}
+function scFlash(msg){const m=$('scMsg');if(!m)return;m.textContent=msg;clearTimeout(m._t);m._t=setTimeout(()=>{m.textContent='';},3000);}
+function renderScenarios(){
+  const list=get(FIRE_SC_KEY,[]);
+  $('scChips').innerHTML=list.length
+    ? list.map(p=>`<span class="tagchip">${escT(p.name)}<button data-scload="${p.id}" title="載入">↺</button><button data-scdel="${p.id}" title="刪除">×</button></span>`).join('')
+    : '<span style="font-size:13px;color:var(--txt3)">尚無儲存的方案</span>';
+  $('scChips').querySelectorAll('[data-scload]').forEach(b=>b.addEventListener('click',()=>{
+    const p=get(FIRE_SC_KEY,[]).find(x=>x.id===b.dataset.scload);
+    if(p){applyState(p.state);$('scName').value=p.name;scFlash(`已載入「${p.name}」`);}
+  }));
+  $('scChips').querySelectorAll('[data-scdel]').forEach(b=>b.addEventListener('click',async()=>{
+    const list2=get(FIRE_SC_KEY,[]);
+    const p=list2.find(x=>x.id===b.dataset.scdel);
+    if(await confirmModal(`刪除方案「${p?p.name:''}」？`,{danger:true,okLabel:'刪除'})){
+      set(FIRE_SC_KEY,list2.filter(x=>x.id!==b.dataset.scdel));
+      renderScenarios();
+    }
+  }));
+  if(compareVisible)renderCompare(); // 方案增刪後同步比較表
+}
+
 let timer=null;function schedule(){clearTimeout(timer);timer=setTimeout(render,80);}
 function init(){
   buildStratSelect();
@@ -540,11 +684,37 @@ function init(){
   $('addFlow').addEventListener('click',()=>{addFlow();schedule();});
   $('modeHist').addEventListener('click',()=>setMode('hist'));
   $('modeMc').addEventListener('click',()=>setMode('mc'));
+  $('pullCap').addEventListener('click',()=>{
+    const t=portfolioTotal();
+    if(t>0){$('startCap').value=Math.round(t);schedule();scFlash('已帶入持股總值 ✓');}
+    else alertModal('共享持股資料目前為空。先到「組合偏離」輸入持股，或手動填本金。');
+  });
+  $('scSave').addEventListener('click',()=>{
+    const name=$('scName').value.trim();
+    if(!name){$('scName').focus();scFlash('請先填方案名稱');return;}
+    const list=get(FIRE_SC_KEY,[]);
+    const snap={name,state:captureState()};
+    const idx=list.findIndex(x=>x.name===name);
+    if(idx>=0){snap.id=list[idx].id;list[idx]=snap;}
+    else{snap.id='s'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);list.push(snap);}
+    set(FIRE_SC_KEY,list);
+    renderScenarios();
+    scFlash('已儲存 ✓');
+  });
+  $('scCompareBtn').addEventListener('click',()=>{
+    if(!get(FIRE_SC_KEY,[]).length){scFlash('先儲存至少一個方案再比較');return;}
+    renderCompare();
+    $('scCompareZone').scrollIntoView({behavior:'smooth',block:'start'});
+  });
+  $('scCmCurrent').addEventListener('click',()=>{compareMode='current';if(compareVisible)renderCompare();});
+  $('scCmOwn').addEventListener('click',()=>{compareMode='own';if(compareVisible)renderCompare();});
   const onResize=()=>{clearTimeout(timer);timer=setTimeout(drawCharts,80);};
   window.addEventListener('resize',onResize);
   _cleanup.push(()=>{window.removeEventListener('resize',onResize);clearTimeout(timer);});
-  renderStratParams();syncAlloc();$('lenVal').textContent='30 年';
-  setMode('hist');
+  renderScenarios();
+  const saved=get(FIRE_STATE_KEY,null);
+  if(saved){applyState(saved);}
+  else{renderStratParams();syncAlloc();$('lenVal').textContent='30 年';setMode('hist');}
 }
 init();
 }

@@ -6,8 +6,9 @@
    - 多計畫存 localStorage、可命名/載入/刪除、每批可標記已執行
    - 不寫回共享持股資料（依使用者決策）
    ============================================================ */
-import { get, set, portfolioTotal } from '../../core/store.js';
+import { get, set, remove, portfolioTotal } from '../../core/store.js';
 import { getSettings } from '../../core/settings.js';
+import { confirmModal, alertModal, flowCrumb } from '../../core/ui.js';
 
 export const id = 'tranche';
 export const title = '分批建倉';
@@ -27,6 +28,10 @@ function fmt(n) {
 }
 function fmt1(n) { return (n == null || !isFinite(n)) ? '—' : n.toFixed(1); }
 function uid() { return 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
 function defaultState() {
@@ -44,13 +49,28 @@ function evenBatches(n) {
   return arr;
 }
 function resizeBatches(n) {
+  // 保留使用者已調整的比重與觸發條件，不再無聲重置
   const old = state.batches;
-  const next = evenBatches(n);
+  const next = [];
   for (let i = 0; i < n; i++) {
-    if (old[i]) { next[i].trigger = old[i].trigger; next[i].executed = old[i].executed; }
+    if (old[i]) next.push({ weight: old[i].weight || 0, trigger: old[i].trigger, executed: old[i].executed });
+    else next.push({ weight: 0, trigger: '', executed: false });
   }
-  // 若使用者改過比重，盡量保留前面的；否則用平均。這裡採平均重置以避免總和混亂。
+  if (n > old.length) {
+    // 新增的批平分「距 100% 的剩餘比重」
+    const sum = old.reduce((s, b) => s + (b.weight || 0), 0);
+    const remain = Math.max(0, 100 - sum);
+    const cnt = n - old.length;
+    const each = Math.floor(remain / cnt);
+    for (let i = old.length; i < n; i++) next[i].weight = each;
+    next[n - 1].weight += remain - each * cnt;
+  }
   state.batches = next;
+}
+function evenizeBatches() {
+  // 顯式的「平均分配」：只動比重，保留觸發條件與已執行
+  const even = evenBatches(state.batches.length);
+  state.batches = state.batches.map((b, i) => ({ ...b, weight: even[i].weight }));
 }
 
 /* ---------- 計算核心 ---------- */
@@ -94,6 +114,28 @@ function renderResults(view) {
   if (!box) return;
   const detailsOpen = !!box.querySelector('details.adv[open]'); // 重繪前記住折疊狀態
 
+  // 引導式空狀態：告訴使用者還缺什麼，填完自動出結果
+  const reqs = [
+    { label: '標的現價', ok: state.price > 0 },
+    { label: '可用現金', ok: state.cash > 0 },
+  ];
+  if (state.targetMode === 'amount') {
+    reqs.push({ label: '目標配置金額', ok: state.targetAmount > 0 });
+  } else {
+    reqs.push({ label: '目標佔組合比重 %', ok: state.targetPct > 0 });
+    reqs.push({ label: '組合總值（佔組合 % 模式必填）', ok: state.portfolioTotal > 0 });
+  }
+  const missing = reqs.filter(x => !x.ok);
+  if (missing.length) {
+    box.innerHTML = `<div class="placeholder" style="margin:20px 0">
+      <div class="tag">還缺 ${missing.length} 項</div>
+      <h2>填完左側必填欄位就會自動計算</h2>
+      <div class="gd-list">${reqs.map(x => `<span class="gd-i ${x.ok ? 'ok' : 'todo'}">${x.ok ? '✓' : '○'} ${x.label}</span>`).join('')}</div>
+      <p style="margin-top:16px">選填：標的代號（記入日誌需要）、已持有股數、觸發條件。</p>
+    </div>`;
+    return;
+  }
+
   const targetLine = r.T > 0
     ? `目標配置金額 <b>${fmt(r.T)}</b>` + (state.targetMode === 'pct' ? `（組合 ${fmt1(state.targetPct)}% × 總值 ${fmt(state.portfolioTotal)}）` : '')
     : '請先填入目標配置';
@@ -124,6 +166,7 @@ function renderResults(view) {
         <span>已投入 ${fmt(row.cumInvested)}</span>
         <span>剩餘現金 ${fmt(row.remaining)} ${insuf}</span>
         ${row.remainingPct != null ? `<span>${lampOf(row.remainingPct)}</span>` : ''}
+        <span class="tr-card-act"><button class="jr-mini" data-log="${row.i}" type="button" title="以今天日期把這批寫入交易日誌">記入日誌</button></span>
       </div>
     </div>`;
   }).join('');
@@ -195,8 +238,49 @@ function renderResults(view) {
 
   box.querySelectorAll('[data-exec]').forEach(cb => cb.addEventListener('change', () => {
     state.batches[+cb.dataset.exec].executed = cb.checked;
+    autosaveExec(view);
     renderResults(view);
   }));
+
+  // A6：把某批以今天日期記入交易日誌（買進），打通執行 → 記錄
+  box.querySelectorAll('[data-log]').forEach(b => b.addEventListener('click', () => {
+    const i = +b.dataset.log;
+    const row = compute().rows[i];
+    if (!String(state.ticker || '').trim()) { alertModal('請先填「標的代號」，日誌需要知道記在哪一檔。'); return; }
+    if (!(row.shares > 0) || !(state.price > 0)) { alertModal('這批的股數或價格為 0，沒有可記入的交易。'); return; }
+    const t = {
+      date: todayStr(), ticker: String(state.ticker).trim().toUpperCase(), side: 'buy',
+      shares: row.shares, price: state.price, sellType: '', score: '', depth: null,
+      note: `分批建倉：${state.name.trim() || '未命名計畫'} 第 ${i + 1} 批`,
+    };
+    const all = get('journal', []);
+    const key = x => [x.date, x.ticker, x.side, x.shares, x.price].join('|');
+    if (all.some(x => key(x) === key(t))) { flash(view, '日誌已有完全相同的一筆，未重複記入'); return; }
+    all.push(t);
+    all.sort((a, b) => a.date.localeCompare(b.date));
+    set('journal', all);
+    if (!state.batches[i].executed) { state.batches[i].executed = true; autosaveExec(view); }
+    flash(view, `已記入交易日誌 ✓ 買 ${fmt(row.shares)} 股（評分可到日誌頁補）`);
+    renderResults(view);
+  }));
+}
+
+/* A2：勾選已執行後，若計畫已儲存過則自動存回，不再依賴手動儲存 */
+function autosaveExec(view) {
+  const plans = get(PLANS_KEY, []);
+  let idx = state.id ? plans.findIndex(p => p.id === state.id) : -1;
+  if (idx < 0 && state.name.trim()) idx = plans.findIndex(p => p.name === state.name.trim());
+  if (idx >= 0) {
+    const snap = JSON.parse(JSON.stringify(state));
+    snap.id = plans[idx].id; snap.name = plans[idx].name;
+    state.id = snap.id;
+    plans[idx] = snap;
+    set(PLANS_KEY, plans);
+    renderPlans(view);
+    flash(view, '已執行狀態已自動存回計畫 ✓');
+  } else {
+    flash(view, '提示：此計畫尚未儲存，勾選狀態重新整理後不會保留');
+  }
 }
 
 /* ---------- SVG 堆疊條（零依賴） ---------- */
@@ -263,8 +347,9 @@ function renderPlans(view) {
     const p = plansCache.find(x => x.id === b.dataset.load);
     if (p) { state = JSON.parse(JSON.stringify(p)); syncForm(view); renderBatchInputs(view); renderResults(view); }
   }));
-  box.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => {
-    if (confirm('刪除這個建倉計畫？')) {
+  box.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
+    const p = plansCache.find(x => x.id === b.dataset.del);
+    if (await confirmModal(`刪除建倉計畫「${p ? p.name : ''}」？`, { danger: true, okLabel: '刪除' })) {
       set(PLANS_KEY, plansCache.filter(x => x.id !== b.dataset.del));
       renderPlans(view);
     }
@@ -292,6 +377,15 @@ function setMode(view, mode) {
   view.querySelector('#mode-pct').classList.toggle('on', mode === 'pct');
   view.querySelector('#row-amount').style.display = mode === 'amount' ? '' : 'none';
   view.querySelector('#row-pct').style.display = mode === 'pct' ? '' : 'none';
+  // A5：切到「佔組合 %」時，若有共享持股資料就自動帶入組合總值
+  if (mode === 'pct' && !(state.portfolioTotal > 0)) {
+    const t = portfolioTotal();
+    if (t > 0) {
+      state.portfolioTotal = t;
+      view.querySelector('#tr-ptotal').value = t;
+      flash(view, '已自動帶入共享持股的組合總值');
+    }
+  }
 }
 
 /* ---------- mount ---------- */
@@ -303,6 +397,7 @@ export function mount(view) {
       <h1>分批建倉計算器</h1>
       <p>把「想買多少」拆成幾批分批進場：算出每批該買幾股（不買零股）、各批執行後的累計持股與剩餘現金，並對照你設定的現金舒適區間。計畫可存在瀏覽器、逐批標記已執行。這是執行計算工具，不產出買賣建議。</p>
     </div></header>
+    ${flowCrumb('tranche')}
 
     <div class="grid">
       <div class="controls">
@@ -332,7 +427,8 @@ export function mount(view) {
         <div class="panel" style="margin-top:18px">
           <div class="seclabel">分批設計</div>
           <div class="field"><label>分批數</label>
-            <select id="tr-count"><option value="1">1 批</option><option value="2">2 批</option><option value="3" selected>3 批</option><option value="4">4 批</option></select>
+            <div class="sub">改批數會保留你調過的比重與觸發條件；要重新平均用右邊按鈕。</div>
+            <div class="inrow"><select id="tr-count" style="width:auto;flex:1"><option value="1">1 批</option><option value="2">2 批</option><option value="3" selected>3 批</option><option value="4">4 批</option></select><button class="btn-ghost" id="tr-even" type="button" style="white-space:nowrap">平均分配比重</button></div>
           </div>
           <div id="tr-batches"></div>
         </div>
@@ -372,7 +468,7 @@ export function mount(view) {
   q('tr-pull').addEventListener('click', () => {
     const t = portfolioTotal();
     if (t > 0) { state.portfolioTotal = t; q('tr-ptotal').value = t; renderResults(view); }
-    else alert('共享持股資料目前為空。請先在「組合偏離」模組輸入持股，或手動填組合總值。');
+    else alertModal('共享持股資料目前為空。請先在「組合偏離」模組輸入持股，或手動填組合總值。');
   });
 
   q('tr-count').addEventListener('change', () => {
@@ -380,6 +476,13 @@ export function mount(view) {
     resizeBatches(state.batchCount);
     renderBatchInputs(view);
     renderResults(view);
+  });
+
+  q('tr-even').addEventListener('click', () => {
+    evenizeBatches();
+    renderBatchInputs(view);
+    renderResults(view);
+    flash(view, '比重已平均分配');
   });
 
   q('tr-save').addEventListener('click', () => {
@@ -395,11 +498,23 @@ export function mount(view) {
     flash(view, '已儲存 ✓');
   });
 
-  q('tr-new').addEventListener('click', () => {
-    if (confirm('清空目前輸入，開新計畫？（已儲存的計畫不受影響）')) {
+  q('tr-new').addEventListener('click', async () => {
+    if (await confirmModal('清空目前輸入，開新計畫？（已儲存的計畫不受影響）')) {
       state = defaultState(); syncForm(view); renderBatchInputs(view); renderResults(view);
     }
   });
+
+  // 接收「組合偏離 → 帶入建倉」的交接資料
+  const ho = get('trancheHandoff', null);
+  if (ho && ho.ticker) {
+    remove('trancheHandoff');
+    state.ticker = ho.ticker;
+    state.targetMode = 'amount';
+    state.targetAmount = Math.max(0, Math.round(ho.amount || 0));
+    if (ho.portfolioTotal > 0) state.portfolioTotal = Math.round(ho.portfolioTotal);
+    syncForm(view);
+    flash(view, `已帶入 ${ho.ticker} 回到目標所需金額，請填現價與可用現金`);
+  }
 
   renderBatchInputs(view);
   renderPlans(view);
@@ -408,5 +523,8 @@ export function mount(view) {
 
 function flash(view, msg) {
   const m = view.querySelector('#tr-msg');
-  if (m) { m.textContent = msg; setTimeout(() => { if (m) m.textContent = ''; }, 2500); }
+  if (!m) return;
+  m.textContent = msg;
+  clearTimeout(m._t); // 避免舊訊息的清除計時器洗掉新訊息
+  m._t = setTimeout(() => { m.textContent = ''; }, 3000);
 }

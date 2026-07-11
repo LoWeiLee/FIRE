@@ -174,6 +174,29 @@ details.adv .advbody{padding:4px 22px 22px;border-top:1px solid var(--line)}
 .view-wrap{max-width:1140px;margin:0 auto;padding:28px 22px 64px}
 @media(max-width:760px){.topnav{gap:10px;padding:10px 16px}.navlinks{order:3;flex-basis:100%}.view-wrap{padding:22px 16px 56px}}
 
+/* ---------- 備份提醒橫幅 ---------- */
+.backup-banner{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  background:linear-gradient(90deg,rgba(224,178,90,0.14),rgba(224,178,90,0.05));
+  border-bottom:1px solid var(--line2);padding:11px 22px;font-size:13.5px;color:var(--txt)}
+.backup-banner .bb-icon{color:var(--gold-bright);font-size:15px}
+.backup-banner .bb-text{flex:1;min-width:220px;line-height:1.55;color:var(--txt2)}
+.backup-banner .bb-acts{display:flex;gap:8px;flex-wrap:wrap}
+.backup-banner button{font-family:var(--mono);font-size:12.5px;padding:7px 14px;border-radius:8px;cursor:pointer;transition:.15s;white-space:nowrap}
+.backup-banner .bb-primary{background:var(--gold);border:none;color:var(--ink);font-weight:600}
+.backup-banner .bb-primary:hover{background:var(--gold-bright)}
+.backup-banner .bb-ghost{background:var(--ink2);border:1px solid var(--line2);color:var(--txt2)}
+.backup-banner .bb-ghost:hover{border-color:var(--gold);color:var(--gold-bright)}
+@media(max-width:760px){.backup-banner{padding:10px 16px}}
+
+/* ---------- FIRE：方案並排比較表 ---------- */
+.sc-table{min-width:720px}
+.sc-table .sc-name{font-weight:600;color:var(--txt);white-space:nowrap}
+.sc-table td.num{font-family:var(--mono);text-align:right;white-space:nowrap}
+.sc-table th:nth-child(n+3){text-align:right}
+.sc-table tr.sc-cur td{background:var(--acc-dim)}
+.sc-table td.sc-best{color:var(--ok);font-weight:600}
+.sc-table td.sc-best::after{content:" ✓";font-size:11px}
+
 /* ---------- 佔位模組 ---------- */
 .placeholder{max-width:640px;margin:40px auto;text-align:center;padding:48px 30px;background:var(--panel);border:1px solid var(--line);border-radius:16px}
 .placeholder .tag{font-family:var(--mono);font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:var(--gold);margin-bottom:16px}
@@ -315,3 +338,46 @@ textarea:focus{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-dim)}
 .jr-editrow td{background:var(--gold-dim)}
 .jr-editrow input,.jr-editrow select{font-size:12.5px;padding:6px 8px;min-width:64px}
 .jr-editrow input[type=date]{min-width:130px}
+.jr-note{max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:var(--txt2)}
+
+/* ---------- 共用：自訂 modal（取代原生 confirm/alert） ---------- */
+.mdl-overlay{position:fixed;inset:0;z-index:200;background:rgba(10,12,16,0.62);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px}
+.mdl-box{background:var(--panel);border:1px solid var(--line2);border-radius:14px;padding:24px 26px;max-width:480px;width:100%;box-shadow:0 18px 50px rgba(0,0,0,0.5)}
+.mdl-title{font-family:var(--sans);font-size:16px;font-weight:700;color:var(--txt);margin-bottom:10px}
+.mdl-body{font-size:14px;color:var(--txt2);line-height:1.7;white-space:pre-line}
+.mdl-btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px;justify-content:flex-end}
+.mdl-btn{font-family:var(--mono);font-size:13px;padding:10px 18px;border-radius:9px;cursor:pointer;transition:.15s}
+.mdl-btn.primary{background:var(--gold);border:none;color:var(--ink);font-weight:600}
+.mdl-btn.primary:hover{background:var(--gold-bright)}
+.mdl-btn.ghost{background:var(--ink2);border:1px solid var(--line2);color:var(--txt2)}
+.mdl-btn.ghost:hover{border-color:var(--gold);color:var(--gold-bright)}
+.mdl-btn.danger{background:rgba(224,137,130,0.14);border:1px solid rgba(224,137,130,0.4);color:var(--bad)}
+.mdl-btn.danger:hover{background:rgba(224,137,130,0.26)}
+
+/* ---------- 共用：工作流位置提示 ---------- */
+.flowcrumb{font-family:var(--mono);font-size:12.5px;color:var(--txt3);margin:-6px 0 22px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.flowcrumb .fc-t{letter-spacing:0.08em;text-transform:uppercase;font-size:11px;margin-right:2px}
+.flowcrumb a{color:var(--txt3);text-decoration:none;padding:3px 9px;border-radius:6px;transition:.15s}
+.flowcrumb a:hover{color:var(--gold-bright);background:var(--gold-dim)}
+.flowcrumb .fc-on{color:var(--gold-bright);background:var(--gold-dim);padding:3px 9px;border-radius:6px}
+.flowcrumb .fc-sep{color:var(--line2)}
+
+/* ---------- 共用：名詞提示 ---------- */
+.tip{border-bottom:1px dotted var(--txt3);cursor:help}
+
+/* ---------- 模組1：引導式空狀態 ---------- */
+.gd-list{display:flex;flex-direction:column;gap:8px;align-items:flex-start;max-width:340px;margin:0 auto;text-align:left}
+.gd-i{font-family:var(--mono);font-size:13.5px;padding:6px 12px;border-radius:8px;width:100%}
+.gd-i.ok{color:var(--ok);background:rgba(127,191,154,0.08)}
+.gd-i.todo{color:var(--gold-bright);background:var(--gold-dim)}
+.tr-card-act{margin-left:auto}
+.tr-card-act .jr-mini{margin-left:0}
+
+/* ---------- 模組2：診斷結論 / 回到目標 ---------- */
+.dv-verdict{background:var(--ink2);border-left:3px solid var(--gold-bright);border-radius:0 10px 10px 0;padding:14px 17px;font-size:14.5px;color:var(--txt);line-height:1.75}
+.dv-verdict.ok{border-left-color:var(--ok)}
+.dv-verdict b{color:var(--gold-bright)}
+.dv-verdict.ok b{color:var(--ok)}
+.dv-gap{white-space:nowrap}
+.dv-gap-add{color:var(--acc);font-family:var(--mono)}
+.dv-gap-cut{color:var(--gold-bright);font-family:var(--mono)}

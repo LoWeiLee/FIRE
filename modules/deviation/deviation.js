@@ -7,8 +7,9 @@
            實際 vs 目標偏離橫條（>5 個百分點高亮）、觸發點燈號列
    - 純診斷，不產出任何買賣建議
    ============================================================ */
-import { getHoldings, setHoldings } from '../../core/store.js';
+import { getHoldings, setHoldings, set, holdingsUpdatedAt, downloadBackup } from '../../core/store.js';
 import { getSettings, activeLayers, isExempt } from '../../core/settings.js';
+import { showModal, flowCrumb } from '../../core/ui.js';
 
 export const id = 'deviation';
 export const title = '組合偏離';
@@ -148,62 +149,100 @@ function renderOutput(view, rows) {
     const bar = i.dev >= 0
       ? `<div class="dv-fill over${hot ? ' hot' : ''}" style="left:50%;width:${half}%"></div>`
       : `<div class="dv-fill under${hot ? ' hot' : ''}" style="left:${50 - half}%;width:${half}%"></div>`;
+    // 回到目標所需金額（純算術換算：目標% × 總值 − 現值），非買賣建議
+    const gap = i.target / 100 * a.total - i.value;
+    let gapCell = '<span class="tr-muted">—</span>';
+    if (Math.abs(gap) >= 1 && i.target > 0) {
+      gapCell = `<span class="${gap >= 0 ? 'dv-gap-add' : 'dv-gap-cut'}">${gap >= 0 ? '＋' : '−'}${fmt(Math.abs(gap))}</span>`;
+      if (gap > 0 && !i.cash) gapCell += ` <button class="jr-mini" data-goto="${esc(i.ticker)}" data-gap="${Math.round(gap)}" type="button" title="把這個金額帶入分批建倉計算器">帶入建倉</button>`;
+    }
     return `<tr class="${hot ? 'dv-hotrow' : ''}">
       <td class="dv-tk">${esc(i.ticker)}${i.cash ? ' <span class="tr-muted">(現金)</span>' : ''}</td>
       <td class="num">${fmt1(i.actual)}%</td>
       <td class="num">${fmt1(i.target)}%</td>
       <td class="dv-track-cell"><div class="dv-track"><div class="dv-center"></div>${bar}</div></td>
       <td class="num dv-dev ${hot ? 'hot' : ''}">${i.dev >= 0 ? '+' : ''}${fmt1(i.dev)}</td>
+      <td class="num dv-gap">${gapCell}</td>
     </tr>`;
   }).join('');
 
   const lamps = [];
+  const issues = []; // 供頂部診斷結論摘要
   a.items.filter(i => !i.cash).forEach(i => {
     if (i.actual >= s.concentration.single) {
       if (isExempt(i.ticker)) {
-        lamps.push(`<div class="lampcard exempt"><div class="lc-k">${esc(i.ticker)}</div><div class="lc-v">${fmt1(i.actual)}%</div><div class="lc-x"><span class="badge">豁免</span> 超過集中度觸發點但在豁免清單</div></div>`);
+        lamps.push(`<div class="lampcard exempt"><div class="lc-k">${esc(i.ticker)}</div><div class="lc-v">${fmt1(i.actual)}%</div><div class="lc-x"><span class="badge" title="在設定頁豁免清單中：超過集中度只提示、不警示">豁免</span> 超過集中度觸發點但在豁免清單</div></div>`);
       } else {
         const strong = i.actual >= s.concentration.strong;
-        lamps.push(`<div class="lampcard ${strong ? 'bad' : 'warn'}"><div class="lc-k">${esc(i.ticker)}</div><div class="lc-v">${fmt1(i.actual)}%</div><div class="lc-x">${strong ? `超過強檢視觸發點 ${s.concentration.strong}%` : `超過集中度觸發點 ${s.concentration.single}%`}，建議走三層判讀</div></div>`);
+        lamps.push(`<div class="lampcard ${strong ? 'bad' : 'warn'}"><div class="lc-k">${esc(i.ticker)}</div><div class="lc-v">${fmt1(i.actual)}%</div><div class="lc-x">${strong ? `超過強檢視觸發點 ${s.concentration.strong}%` : `超過集中度觸發點 ${s.concentration.single}%`}，建議走<span class="tip" title="體感／故事／時機三層檢核，任一層紅燈都可暫不動">三層判讀</span></div></div>`);
+        issues.push(`${esc(i.ticker)} 超過${strong ? '強檢視' : '集中度'}觸發點（${fmt1(i.actual)}%）`);
       }
     }
   });
   {
     const cp = a.cashPct;
-    if (cp < s.cash.low) lamps.push(`<div class="lampcard warn"><div class="lc-k">現金</div><div class="lc-v">${fmt1(cp)}%</div><div class="lc-x">低於舒適區間下緣 ${s.cash.low}%</div></div>`);
-    else if (cp > s.cash.high) lamps.push(`<div class="lampcard warn"><div class="lc-k">現金</div><div class="lc-v">${fmt1(cp)}%</div><div class="lc-x">高於舒適區間上緣 ${s.cash.high}%</div></div>`);
+    if (cp < s.cash.low) { lamps.push(`<div class="lampcard warn"><div class="lc-k">現金</div><div class="lc-v">${fmt1(cp)}%</div><div class="lc-x">低於舒適區間下緣 ${s.cash.low}%</div></div>`); issues.push(`現金低於舒適下緣（${fmt1(cp)}%）`); }
+    else if (cp > s.cash.high) { lamps.push(`<div class="lampcard warn"><div class="lc-k">現金</div><div class="lc-v">${fmt1(cp)}%</div><div class="lc-x">高於舒適區間上緣 ${s.cash.high}%</div></div>`); issues.push(`現金高於舒適上緣（${fmt1(cp)}%）`); }
     else lamps.push(`<div class="lampcard ok"><div class="lc-k">現金</div><div class="lc-v">${fmt1(cp)}%</div><div class="lc-x">落在舒適區間 ${s.cash.low}–${s.cash.high}%</div></div>`);
   }
   Object.entries(a.byLayer).forEach(([layer, pct]) => {
     if (layer === '現金' || isCash(layer)) return;
-    if (pct > s.categoryCap) lamps.push(`<div class="lampcard warn"><div class="lc-k">${esc(layer)}</div><div class="lc-v">${fmt1(pct)}%</div><div class="lc-x">分類合計超過上限 ${s.categoryCap}%</div></div>`);
+    if (pct > s.categoryCap) { lamps.push(`<div class="lampcard warn"><div class="lc-k">${esc(layer)}</div><div class="lc-v">${fmt1(pct)}%</div><div class="lc-x">分類合計超過上限 ${s.categoryCap}%</div></div>`); issues.push(`「${esc(layer)}」分類超過上限（${fmt1(pct)}%）`); }
   });
+
+  // B2：一句話診斷結論
+  const worst = a.items.slice().sort((x, y) => Math.abs(y.dev) - Math.abs(x.dev))[0];
+  const worstTxt = worst ? `最大偏離：${esc(worst.ticker)} ${worst.dev >= 0 ? '+' : ''}${fmt1(worst.dev)}pp` : '';
+  const verdict = issues.length
+    ? `<div class="dv-verdict warn"><b>${issues.length} 個觸發點</b>：${issues.join('、')}。${worstTxt}。</div>`
+    : `<div class="dv-verdict ok">無觸發點，組合落在你設定的門檻內。${worstTxt}。</div>`;
+
+  // B5：持股資料最後更新時間（顯示為本地時間）
+  const upd = holdingsUpdatedAt();
+  const updTxt = upd ? `持股資料最後更新：${new Date(upd).toLocaleString('zh-TW', { hour12: false })}。現值是手動輸入的快照，久未更新請重新貼上。` : '';
+
+  const treeOpen = !!box.querySelector('details.adv[open]'); // 重繪前記住折疊狀態
 
   box.innerHTML = `
     <div class="zone">
-      <div class="q">觸發點燈號</div>
-      <div class="lampgrid">${lamps.join('')}</div>
-      <div class="chartnote">門檻來自設定頁：集中度 ${s.concentration.single}% / ${s.concentration.strong}%，現金舒適區間 ${s.cash.low}–${s.cash.high}%，分類上限 ${s.categoryCap}%。此處僅做診斷呈現，不含任何買賣建議。</div>
+      <div class="q">診斷結論</div>
+      ${verdict}
     </div>
 
     <div class="zone">
-      <div class="q">分類層級 treemap</div>
-      <div class="panel">
-        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto;display:block">${tileSVG}</svg>
-        <div class="tr-legend">${legend}</div>
-      </div>
+      <div class="q">觸發點燈號</div>
+      <div class="lampgrid">${lamps.join('')}</div>
+      <div class="chartnote">門檻來自設定頁：<span class="tip" title="單一標的佔組合比重的警戒線，超過建議重新檢視">集中度</span> ${s.concentration.single}% / ${s.concentration.strong}%，現金舒適區間 ${s.cash.low}–${s.cash.high}%，分類上限 ${s.categoryCap}%。此處僅做診斷呈現，不含任何買賣建議。</div>
     </div>
 
     <div class="zone">
       <div class="q">實際 vs 目標偏離（偏離 &gt; 5 個百分點高亮）</div>
       <div class="tr-tablewrap">
         <table class="tr-table dv-table">
-          <thead><tr><th>標的</th><th>實際</th><th>目標</th><th style="text-align:center">偏離（← 不足　超出 →）</th><th>偏離值</th></tr></thead>
+          <thead><tr><th>標的</th><th>實際</th><th>目標</th><th style="text-align:center">偏離（← 不足　超出 →）</th><th>偏離值</th><th>回到目標</th></tr></thead>
           <tbody>${devRows}</tbody>
         </table>
       </div>
-      <div class="chartnote">組合總值 ${fmt(a.total)}（含現金）。偏離值＝實際佔比 − 目標佔比（百分點）。</div>
-    </div>`;
+      <div class="chartnote">組合總值 ${fmt(a.total)}（含現金）。偏離值＝實際佔比 − 目標佔比（百分點）。「回到目標」＝目標% × 總值 − 現值的算術換算（＋需加碼、−為超出），只是換算、不是建議；「帶入建倉」會把金額與代號送進分批建倉計算器。${updTxt ? '<br>' + updTxt : ''}</div>
+    </div>
+
+    <details class="adv">
+      <summary>分類層級 treemap（組合視覺化）</summary>
+      <div class="advbody">
+        <div style="margin-top:14px">
+          <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto;display:block">${tileSVG}</svg>
+          <div class="tr-legend">${legend}</div>
+        </div>
+      </div>
+    </details>`;
+
+  if (treeOpen) { const d = box.querySelector('details.adv'); if (d) d.open = true; }
+
+  // B3：帶入建倉（寫入交接資料後切頁）
+  box.querySelectorAll('[data-goto]').forEach(b => b.addEventListener('click', () => {
+    set('trancheHandoff', { ticker: b.dataset.goto, amount: +b.dataset.gap || 0, portfolioTotal: a.total });
+    location.hash = '#/tranche';
+  }));
 }
 
 /* ---------- 渲染可編輯表格（結構變動時重建） ---------- */
@@ -308,6 +347,7 @@ export function mount(view) {
       <h1>組合偏離視覺化</h1>
       <p>在表格裡逐欄填入持股，工具即時把組合的實際長相攤開：分類層級 treemap、每檔實際 vs 目標的偏離、以及對照你設定門檻的觸發點燈號。邊改邊算，只做診斷呈現、不告訴你該買該賣。資料只存在你的瀏覽器，並與分批建倉計算器共用。</p>
     </div></header>
+    ${flowCrumb('deviation')}
 
     <datalist id="dv-layers">${layerOpts}</datalist>
 
@@ -363,8 +403,21 @@ export function mount(view) {
   q('dv-demo').addEventListener('click', () => { state.rows = DEMO_ROWS.map(r => ({ ...r })); renderTable(view); flash(view, '已載入示範資料'); });
   q('dv-paste-merge').addEventListener('click', () => applyPaste(view, 'merge'));
   q('dv-paste-replace').addEventListener('click', () => applyPaste(view, 'replace'));
-  q('dv-clear').addEventListener('click', () => {
-    if (confirm('清空所有持股輸入並從共享資料移除？')) { state.rows = [blankRow(), blankRow(), blankRow()]; renderTable(view); flash(view, '已清空'); }
+  q('dv-clear').addEventListener('click', async () => {
+    const choice = await showModal({
+      title: '清空持股輸入',
+      body: '這會同時清掉「分批建倉」共用的共享持股資料。要先下載一份全站備份嗎？',
+      buttons: [
+        { label: '先匯出備份再清空', kind: 'primary', value: 'backup' },
+        { label: '直接清空', kind: 'danger', value: 'clear' },
+        { label: '取消', kind: 'ghost', value: null },
+      ],
+    });
+    if (!choice) return;
+    if (choice === 'backup') downloadBackup();
+    state.rows = [blankRow(), blankRow(), blankRow()];
+    renderTable(view);
+    flash(view, '已清空');
   });
 
   renderTable(view);
@@ -372,5 +425,8 @@ export function mount(view) {
 
 function flash(view, msg) {
   const m = view.querySelector('#dv-msg');
-  if (m) { m.textContent = msg; setTimeout(() => { if (m) m.textContent = ''; }, 2500); }
+  if (!m) return;
+  m.textContent = msg;
+  clearTimeout(m._t);
+  m._t = setTimeout(() => { m.textContent = ''; }, 3000);
 }

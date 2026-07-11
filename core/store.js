@@ -58,6 +58,7 @@ export function downloadBackup() {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+  set('lastBackupAt', new Date().toISOString()); // 供備份提醒判斷
 }
 
 export function importAll(payload, { merge = false } = {}) {
@@ -90,7 +91,38 @@ export function clearAll() {
    value=現值、target=目標佔比(%)、layer=分類層級    */
 export const HOLDINGS_KEY = 'holdings';
 export function getHoldings() { return get(HOLDINGS_KEY, []); }
-export function setHoldings(list) { set(HOLDINGS_KEY, Array.isArray(list) ? list : []); }
+export function setHoldings(list) {
+  set(HOLDINGS_KEY, Array.isArray(list) ? list : []);
+  set('holdingsMeta', { updatedAt: new Date().toISOString() });
+}
+/* 持股資料最後更新時間（ISO 字串，無資料回 null） */
+export function holdingsUpdatedAt() {
+  const m = get('holdingsMeta', null);
+  return m && m.updatedAt ? m.updatedAt : null;
+}
 export function portfolioTotal() {
   return getHoldings().reduce((s, h) => s + (Number(h.value) || 0), 0);
+}
+
+/* ---------- 備份提醒 ---------- */
+/* 是否有「值得備份」的實質資料（排除自動存的 FIRE 輸入預設值與純 meta） */
+export function hasUserData() {
+  const arr = k => { const v = get(k, []); return Array.isArray(v) && v.length > 0; };
+  const settings = get('settings', null);
+  return arr('holdings') || arr('tranchePlans') || arr('journal') || arr('fireScenarios')
+    || (settings && typeof settings === 'object' && Object.keys(settings).length > 0);
+}
+export function lastBackupAt() { return get('lastBackupAt', null); }
+/* 回傳提醒狀態：null=不需提醒；否則 {never, days} */
+export function backupReminder() {
+  if (!hasUserData()) return null;
+  const snooze = get('backupSnoozeUntil', null);
+  if (snooze && Date.now() < new Date(snooze).getTime()) return null;
+  const last = lastBackupAt();
+  if (!last) return { never: true, days: null };
+  const days = Math.floor((Date.now() - new Date(last).getTime()) / 86400000);
+  return days >= 30 ? { never: false, days } : null;
+}
+export function snoozeBackup(daysAhead = 7) {
+  set('backupSnoozeUntil', new Date(Date.now() + daysAhead * 86400000).toISOString());
 }
