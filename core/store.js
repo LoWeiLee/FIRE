@@ -38,9 +38,12 @@ export function keys() {
 }
 
 /* ---------- 全站匯出 / 匯入 / 清除 ---------- */
+/* 不進備份檔的內部暫存 key（復原快照只在本次工作階段有意義） */
+const TRANSIENT_KEYS = ['lastDeleted'];
+
 export function exportAll() {
   const out = {};
-  keys().forEach(k => { out[k] = get(k); });
+  keys().filter(k => !TRANSIENT_KEYS.includes(k)).forEach(k => { out[k] = get(k); });
   return {
     _meta: { app: 'investment-toolbox', version: 1, exportedAt: new Date().toISOString() },
     data: out,
@@ -100,8 +103,65 @@ export function holdingsUpdatedAt() {
   const m = get('holdingsMeta', null);
   return m && m.updatedAt ? m.updatedAt : null;
 }
+/* 持股快照距今幾天（無持股或無時間戳回 null） */
+export function holdingsAgeDays() {
+  const at = holdingsUpdatedAt();
+  if (!at || !getHoldings().length) return null;
+  const ms = Date.now() - new Date(at).getTime();
+  if (!isFinite(ms) || ms < 0) return 0;
+  return Math.floor(ms / 86400000);
+}
+/* 持股快照是否已過期（門檻由設定頁 staleDays 決定，呼叫端傳入） */
+export function holdingsStale(staleDays) {
+  const d = holdingsAgeDays();
+  if (d == null) return null;
+  const th = Number(staleDays);
+  if (!Number.isFinite(th) || th <= 0) return null;
+  return d >= th ? { days: d, threshold: th } : null;
+}
 export function portfolioTotal() {
   return getHoldings().reduce((s, h) => s + (Number(h.value) || 0), 0);
+}
+
+/* ---------- 破壞性操作的安全網：單槽快照 + 復原 ---------- */
+/* 覆蓋式單槽。執行清除前呼叫 snapshot(['holdings','journal'])，
+   之後 restoreLast() 即可把當時的值原封寫回。預設 30 秒後視為過期。 */
+const UNDO_KEY = 'lastDeleted';
+export const UNDO_TTL_MS = 30000;
+
+export function snapshot(keyList, label = '') {
+  const data = {};
+  (keyList || []).forEach(k => { data[k] = get(k, null); });
+  set(UNDO_KEY, { at: Date.now(), label, data });
+}
+
+/* 目前是否有可復原的快照（過期回 null） */
+export function pendingUndo() {
+  const u = get(UNDO_KEY, null);
+  if (!u || !u.data || typeof u.at !== 'number') return null;
+  if (Date.now() - u.at > UNDO_TTL_MS) return null;
+  return u;
+}
+
+/* 復原最近一次快照。成功回 true。 */
+export function restoreLast() {
+  const u = pendingUndo();
+  if (!u) return false;
+  Object.entries(u.data).forEach(([k, v]) => {
+    if (v == null) remove(k); else set(k, v);
+  });
+  remove(UNDO_KEY);
+  return true;
+}
+
+export function clearUndo() { remove(UNDO_KEY); }
+
+/* 全站清除 + 保留復原快照（clearAll 會連 UNDO_KEY 一起掃掉，故先取後放） */
+export function clearAllWithUndo(label = '全站清除') {
+  const data = {};
+  keys().filter(k => !TRANSIENT_KEYS.includes(k)).forEach(k => { data[k] = get(k, null); });
+  clearAll();
+  set(UNDO_KEY, { at: Date.now(), label, data });
 }
 
 /* ---------- 備份提醒 ---------- */

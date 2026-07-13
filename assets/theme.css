@@ -12,8 +12,15 @@
   --mono:'IBM Plex Mono',ui-monospace,monospace;
   --sans:'IBM Plex Sans',system-ui,sans-serif;
   --disp:'Fraunces',Georgia,serif;
+  /* 導航實際高度，由 shell.js 於載入與 resize 時量測寫入。
+     stickybar 用它當錨點，避免被 topnav 的半透明模糊層蓋住。 */
+  --nav-h:56px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
+/* 鍵盤使用者：跳過導航直達內容 */
+.skiplink{position:absolute;left:-9999px;top:0;z-index:400;background:var(--gold);color:var(--ink);
+  font-family:var(--mono);font-size:13px;font-weight:600;padding:11px 18px;border-radius:0 0 9px 0}
+.skiplink:focus{left:0}
 html,body{background:var(--ink);color:var(--txt);font-family:var(--sans);-webkit-font-smoothing:antialiased;line-height:1.6}
 body{background-image:radial-gradient(1100px 560px at 84% -14%, rgba(224,178,90,0.05), transparent 62%);min-height:100vh;font-size:15px}
 .wrap{max-width:1140px;margin:0 auto}
@@ -54,15 +61,20 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;bac
 .flow{background:var(--ink2);border:1px solid var(--line);border-radius:10px;padding:13px;margin-bottom:10px;position:relative}
 .flow .flowgrid{display:grid;grid-template-columns:1fr 1fr;gap:9px} .flow .full{grid-column:1/3}
 .flow input,.flow select{font-size:13.5px;padding:8px 10px} .flow label{font-size:12.5px;margin-bottom:4px;font-weight:600;color:var(--txt2)}
-.flow .rm{position:absolute;top:9px;right:10px;background:none;border:none;color:var(--txt3);cursor:pointer;font-size:18px;line-height:1;padding:2px 5px;border-radius:6px}
+/* P1-5：移除現金流的點擊區撐到 40px */
+.flow .rm{position:absolute;top:5px;right:6px;background:none;border:none;color:var(--txt3);cursor:pointer;font-size:18px;line-height:1;
+  min-width:40px;min-height:40px;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;transition:.15s}
 .flow .rm:hover{color:var(--bad);background:var(--bad-dim)}
+.flow .rm:focus-visible{outline:2px solid var(--gold);outline-offset:-2px}
 .chk2{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--txt2);cursor:pointer} .chk2 input{width:auto;accent-color:var(--gold)}
 .addbtn{width:100%;background:var(--ink2);border:1px dashed var(--line2);color:var(--txt2);padding:11px;border-radius:9px;cursor:pointer;font-family:var(--mono);font-size:13px;transition:.15s}
 .addbtn:hover{border-color:var(--gold);color:var(--gold-bright)}
 
 .zone{margin-bottom:22px}
 .modebar{display:flex;align-items:center;gap:15px;margin-bottom:20px;flex-wrap:wrap}
-.stickybar{position:sticky;top:10px;z-index:30;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;background:rgba(15,17,21,0.94);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid var(--line2);border-radius:12px;padding:13px 19px;margin-bottom:18px;box-shadow:0 8px 22px rgba(0,0,0,0.28)}
+.stickybar{position:sticky;top:calc(var(--nav-h) + 10px);z-index:30;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;background:rgba(15,17,21,0.94);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid var(--line2);border-radius:12px;padding:13px 19px;margin-bottom:18px;box-shadow:0 8px 22px rgba(0,0,0,0.28)}
+/* 窄螢幕 nav 會換成多行、吃掉半個畫面，此時 sticky 的成本大於效益 → 改為隨頁面捲動 */
+@media(max-width:760px){.stickybar{position:static;top:auto}}
 .sb-main{display:flex;align-items:baseline;gap:11px}
 .sb-age{font-family:var(--disp);font-size:23px;font-weight:600;color:var(--gold-bright);line-height:1}
 .sb-sub{font-size:13.5px;color:var(--txt2);font-family:var(--mono)}
@@ -137,9 +149,10 @@ details.adv .advbody{padding:4px 22px 22px;border-top:1px solid var(--line)}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:20px}
 @media(max-width:620px){.stats{grid-template-columns:repeat(2,1fr)}}
 .stat{background:var(--ink2);border:1px solid var(--line);border-radius:11px;padding:13px}
-.stat .k{font-family:var(--mono);font-size:11px;letter-spacing:0.03em;text-transform:uppercase;color:var(--txt3);margin-bottom:7px}
+/* P1-8：統計卡標籤是常讀元素，字級與對比拉高（11px/txt3 → 12px/txt2） */
+.stat .k{font-family:var(--mono);font-size:12px;letter-spacing:0.03em;text-transform:uppercase;color:var(--txt2);margin-bottom:7px}
 .stat .v{font-family:var(--mono);font-size:17px;color:var(--txt);font-weight:500}
-.stat .x{font-size:11.5px;color:var(--txt2);margin-top:4px;font-family:var(--mono)}
+.stat .x{font-size:12px;color:var(--txt2);margin-top:4px;font-family:var(--mono)}
 
 .foot{margin-top:24px;color:var(--txt2);font-size:13.5px;line-height:1.7}
 .foot b{color:var(--txt);font-weight:600}
@@ -215,9 +228,15 @@ details.adv .advbody{padding:4px 22px 22px;border-top:1px solid var(--line)}
 .setrow .lab small{display:block;font-weight:400;color:var(--txt2);font-size:12.5px;margin-top:2px;line-height:1.5}
 .setrow .inrow{justify-content:flex-end}
 .tagrow{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
-.tagchip{display:inline-flex;align-items:center;gap:7px;background:var(--ink2);border:1px solid var(--line2);border-radius:20px;padding:6px 12px;font-family:var(--mono);font-size:13px;color:var(--txt)}
-.tagchip button{background:none;border:none;color:var(--txt3);cursor:pointer;font-size:15px;line-height:1;padding:0}
-.tagchip button:hover{color:var(--bad)}
+/* P1-5：載入(↺)與刪除(×)相鄰，手機誤觸即觸發刪除流程。
+   圖示維持小尺寸，但點擊區撐到 40px 並拉開兩者間距。 */
+.tagchip{display:inline-flex;align-items:center;gap:2px;background:var(--ink2);border:1px solid var(--line2);border-radius:22px;padding:4px 6px 4px 13px;font-family:var(--mono);font-size:13px;color:var(--txt)}
+.tagchip button{background:none;border:none;color:var(--txt3);cursor:pointer;font-size:15px;line-height:1;
+  min-width:40px;min-height:40px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;transition:.15s}
+.tagchip button + button{margin-left:6px}
+.tagchip button:hover{color:var(--bad);background:var(--bad-dim)}
+.tagchip button[data-load]:hover,.tagchip button[data-scload]:hover{color:var(--gold-bright);background:var(--gold-dim)}
+.tagchip button:focus-visible{outline:2px solid var(--gold);outline-offset:1px}
 .savebar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:4px}
 .btn-primary{font-family:var(--mono);font-size:14px;color:var(--ink);background:var(--gold);border:none;padding:11px 22px;border-radius:9px;cursor:pointer;font-weight:600;transition:.15s}
 .btn-primary:hover{background:var(--gold-bright)}
@@ -233,7 +252,7 @@ details.adv .advbody{padding:4px 22px 22px;border-top:1px solid var(--line)}
 .tr-batch-h{font-family:var(--mono);font-size:12px;color:var(--gold);margin-bottom:9px;letter-spacing:0.04em}
 .tr-tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
 .tr-table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:760px}
-.tr-table th{font-family:var(--mono);font-size:11px;letter-spacing:0.03em;text-transform:uppercase;color:var(--txt3);font-weight:500;text-align:left;padding:11px 12px;background:var(--ink2);border-bottom:1px solid var(--line2);white-space:nowrap}
+.tr-table th{font-family:var(--mono);font-size:12px;letter-spacing:0.03em;text-transform:uppercase;color:var(--txt2);font-weight:500;text-align:left;padding:11px 12px;background:var(--ink2);border-bottom:1px solid var(--line2);white-space:nowrap}
 .tr-table td{padding:11px 12px;border-bottom:1px solid var(--line);color:var(--txt);vertical-align:middle}
 .tr-table tr:last-child td{border-bottom:none}
 .tr-table td.num{font-family:var(--mono);text-align:right;white-space:nowrap}
@@ -277,15 +296,20 @@ textarea:focus{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-dim)}
 .dv-hotrow td{background:rgba(224,178,90,0.06)}
 /* 可編輯持股表格 */
 .dv-edit{width:100%;border-collapse:collapse;font-size:13px;min-width:560px}
-.dv-edit th{font-family:var(--mono);font-size:11px;letter-spacing:0.03em;text-transform:uppercase;color:var(--txt3);font-weight:500;text-align:left;padding:8px 8px;border-bottom:1px solid var(--line2);white-space:nowrap}
+.dv-edit th{font-family:var(--mono);font-size:12px;letter-spacing:0.03em;text-transform:uppercase;color:var(--txt2);font-weight:500;text-align:left;padding:8px 8px;border-bottom:1px solid var(--line2);white-space:nowrap}
 .dv-edit th:nth-child(2),.dv-edit th:nth-child(3),.dv-edit th:nth-child(5){text-align:right}
 .dv-edit td{padding:5px 6px;border-bottom:1px solid var(--line);vertical-align:middle}
 .dv-edit td.num{text-align:right;font-family:var(--mono);color:var(--txt2);white-space:nowrap}
 .dv-edit input{padding:8px 9px;font-size:13.5px}
 .dv-edit input[type=number]{text-align:right}
 .dv-edit th:nth-child(1){width:88px}.dv-edit th:nth-child(2){width:110px}.dv-edit th:nth-child(3){width:74px}.dv-edit th:nth-child(5){width:64px}.dv-edit th:nth-child(6){width:34px}
-.dv-del{background:none;border:none;color:var(--txt3);cursor:pointer;font-size:18px;line-height:1;padding:4px 6px;border-radius:6px}
+/* P1-5：刪除列的點擊區撐到 40px */
+.dv-del{background:none;border:none;color:var(--txt3);cursor:pointer;font-size:18px;line-height:1;
+  min-width:40px;min-height:40px;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;transition:.15s}
 .dv-del:hover{color:var(--bad);background:var(--bad-dim)}
+.dv-del:focus-visible{outline:2px solid var(--gold);outline-offset:-2px}
+/* 現值欄下方的口語化金額提示（P1-2） */
+.dv-mini{display:block;font-size:11px;color:var(--txt2);font-family:var(--mono);margin-top:3px;min-height:14px;text-align:right}
 .dv-foot{padding:9px 8px;border-top:1px solid var(--line2);font-family:var(--mono);font-size:12.5px;color:var(--txt2);font-weight:500}
 .dv-sum.off{color:var(--bad)}
 
@@ -362,8 +386,63 @@ textarea:focus{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold-dim)}
 .flowcrumb .fc-on{color:var(--gold-bright);background:var(--gold-dim);padding:3px 9px;border-radius:6px}
 .flowcrumb .fc-sep{color:var(--line2)}
 
-/* ---------- 共用：名詞提示 ---------- */
-.tip{border-bottom:1px dotted var(--txt3);cursor:help}
+/* ---------- 共用：名詞提示（P1-6：hover / 點擊 / 鍵盤聚焦皆可觸發） ----------
+   原本只用 title 屬性，觸控裝置永遠看不到解釋。改成 <button class="tip" data-tip="...">，
+   popover 內容取自 data-tip，:hover 與 :focus 都會顯示，純 CSS 不加依賴。 */
+.tip{position:relative;display:inline;background:none;border:none;padding:0;margin:0;
+  font:inherit;color:inherit;line-height:inherit;
+  border-bottom:1px dotted var(--txt3);cursor:help;-webkit-tap-highlight-color:transparent}
+.tip:hover,.tip:focus{border-bottom-color:var(--gold);color:var(--gold-bright);outline:none}
+.tip::after{content:attr(data-tip);position:absolute;left:50%;bottom:calc(100% + 8px);transform:translateX(-50%);
+  width:max-content;max-width:min(260px,72vw);white-space:normal;text-align:left;
+  background:var(--panel2);color:var(--txt);border:1px solid var(--line2);border-radius:9px;
+  padding:9px 12px;font-family:var(--sans);font-size:12.5px;font-weight:400;line-height:1.55;letter-spacing:0;
+  box-shadow:0 10px 26px rgba(0,0,0,0.45);z-index:120;
+  opacity:0;visibility:hidden;pointer-events:none;transition:opacity .12s}
+.tip:hover::after,.tip:focus::after,.tip:focus-visible::after{opacity:1;visibility:visible}
+/* 圖表磚塊的點擊提示（treemap tile、SVG 圖形）也走同一套 popover */
+.tilehint{margin-top:10px;font-family:var(--mono);font-size:12.5px;color:var(--txt2);min-height:18px}
+.tilehint b{color:var(--gold-bright);font-weight:600}
+
+/* ---------- 共用：toast（可帶「復原」動作，P2-2） ---------- */
+.toast{position:fixed;right:20px;bottom:20px;z-index:300;display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  max-width:min(460px,calc(100vw - 40px));
+  background:var(--panel2);border:1px solid var(--line2);border-radius:12px;padding:13px 14px 13px 17px;
+  box-shadow:0 16px 40px rgba(0,0,0,0.5);font-size:13.5px;color:var(--txt);line-height:1.55}
+.toast .toast-msg{flex:1;min-width:150px}
+.toast .toast-act{font-family:var(--mono);font-size:13px;background:var(--gold);border:none;color:var(--ink);
+  font-weight:600;padding:9px 16px;border-radius:8px;cursor:pointer;min-height:40px;white-space:nowrap;transition:.15s}
+.toast .toast-act:hover{background:var(--gold-bright)}
+.toast .toast-x{background:none;border:none;color:var(--txt3);font-size:17px;line-height:1;cursor:pointer;
+  min-width:36px;min-height:36px;display:inline-flex;align-items:center;justify-content:center;border-radius:8px}
+.toast .toast-x:hover{color:var(--txt);background:var(--ink2)}
+@media(max-width:620px){.toast{left:16px;right:16px;bottom:16px;max-width:none}}
+
+/* ---------- 共用：示範資料預覽橫幅（P0-1 / P0-2） ---------- */
+.preview-banner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 18px;
+  background:linear-gradient(90deg,rgba(110,155,192,0.18),rgba(110,155,192,0.05));
+  border:1px solid rgba(110,155,192,0.4);border-left:3px solid var(--acc);border-radius:0 10px 10px 0;
+  padding:12px 16px;font-size:13.5px;color:var(--txt)}
+.preview-banner .pv-icon{color:var(--acc);font-size:15px}
+.preview-banner .pv-text{flex:1;min-width:200px;line-height:1.55;color:var(--txt2)}
+.preview-banner .pv-exit{font-family:var(--mono);font-size:13px;background:var(--acc);border:none;color:var(--ink);
+  font-weight:600;padding:9px 16px;border-radius:8px;cursor:pointer;min-height:40px;white-space:nowrap;transition:.15s}
+.preview-banner .pv-exit:hover{filter:brightness(1.15)}
+
+/* ---------- 共用：驗證錯誤訊息 ---------- */
+.errmsg{margin-top:12px;padding:11px 14px;background:rgba(224,137,130,0.1);border:1px solid rgba(224,137,130,0.35);
+  border-radius:9px;color:var(--txt);font-size:13px;line-height:1.65}
+.errmsg ul{margin:0;padding-left:18px}
+.errmsg b{color:var(--bad)}
+.errmsg:empty{display:none}
+
+/* ---------- 共用：金額口語化提示（P1-2） ---------- */
+.moneyhint{font-family:var(--mono);font-size:12.5px;color:var(--gold-bright);margin-top:6px;min-height:17px}
+.rangehint{font-size:12.5px;color:var(--bad);margin-top:6px;line-height:1.5;min-height:0}
+.rangehint:empty{display:none}
+
+/* P1-5：明細表的小按鈕（編輯/刪除/記入日誌）點擊區加大 */
+.jr-mini{min-height:40px;display:inline-flex;align-items:center}
 
 /* ---------- 模組1：引導式空狀態 ---------- */
 .gd-list{display:flex;flex-direction:column;gap:8px;align-items:flex-start;max-width:340px;margin:0 auto;text-align:left}

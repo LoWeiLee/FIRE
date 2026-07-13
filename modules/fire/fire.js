@@ -7,8 +7,26 @@
      3) resize 監聽器於 unmount 時移除，避免切換模組後殘留
    ============================================================ */
 
-import { get, set, portfolioTotal } from '../../core/store.js';
-import { confirmModal, alertModal } from '../../core/ui.js';
+import { get, set, portfolioTotal, holdingsAgeDays } from '../../core/store.js';
+import { getSettings } from '../../core/settings.js';
+import { confirmModal, alertModal, markLiveRegions } from '../../core/ui.js';
+import { moneyHintOf } from '../../core/format.js';
+
+/* P1-4：安全提領率與目標退休年齡的合法範圍。
+   原本 parseFloat(...)||4 把合法的 0 與空值一視同仁，清空重打的過程中結果會
+   靜默跳到 4%，使用者不知道現在算的是哪個數字。改為 Number.isFinite + clamp，
+   並在超界或空值時給出可見回饋。 */
+const SAFE_RATE = { min: 2, max: 8, def: 4 };
+const TARGET_AGE = { min: 30, max: 90, def: 65 };
+
+/* 回傳 {value, note}：value 是實際用於計算的數字，note 是要顯示給使用者的說明（無則空字串） */
+function readBounded(raw, { min, max, def }, label, unit = '') {
+  const v = parseFloat(raw);
+  if (!Number.isFinite(v)) return { value: def, note: `${label}未填，暫以預設 ${def}${unit} 計算。` };
+  if (v < min) return { value: min, note: `${label} ${v}${unit} 低於下限，已以 ${min}${unit} 計算。` };
+  if (v > max) return { value: max, note: `${label} ${v}${unit} 高於上限，已以 ${max}${unit} 計算。` };
+  return { value: v, note: '' };
+}
 
 export const id = 'fire';
 export const title = 'FIRE 試算';
@@ -34,19 +52,23 @@ const FIRE_HTML = `
             <select id="cur" style="width:84px"><option value="NT$">NT$</option><option value="US$">US$</option><option value="€">€</option></select></div>
         </div>
         <div class="field">
-          <label>現在手上有多少投資本金</label>
+          <label for="startCap">現在手上有多少投資本金</label>
           <div class="sub">還沒開始也沒關係，填 0。也可以直接帶入「組合偏離」的持股總值。</div>
           <div class="inrow"><input type="number" id="startCap" value="1000000" step="100000" min="0"><button class="btn-ghost" id="pullCap" type="button" style="white-space:nowrap">帶入持股</button></div>
+          <div class="moneyhint" id="hint-startCap"></div>
+          <div class="rangehint" id="fireStale"></div>
         </div>
         <div class="field">
-          <label>每個月能投入多少</label>
+          <label for="monthly">每個月能投入多少</label>
           <div class="sub">定期定額，小額也算數。這是今天的金額；工具假設你每年會隨物價小幅調高投入，若你長年固定不調，實際累積會比這裡少一些。</div>
           <input type="number" id="monthly" value="35000" step="1000" min="0">
+          <div class="moneyhint" id="hint-monthly"></div>
         </div>
         <div class="field">
-          <label>退休後每年想花多少</label>
+          <label for="spend">退休後每年想花多少</label>
           <div class="sub">用今天的物價想就好。</div>
           <input type="number" id="spend" value="960000" step="50000" min="0">
+          <div class="moneyhint" id="hint-spend"></div>
         </div>
       </div>
       <details class="adv">
@@ -56,6 +78,7 @@ const FIRE_HTML = `
             <div class="full">
               <label class="chk"><input type="checkbox" id="manualAge">我想自己指定退休年齡，而不是讓工具幫我算最早能退的時間</label>
               <div class="inrow" id="targetAgeRow" style="margin-top:11px;display:none"><span class="suffix">目標退休年齡</span><input type="number" id="targetAge" value="65" min="30" max="90" step="1" style="width:120px"><span class="suffix">歲</span></div>
+              <div class="rangehint" id="ageHint"></div>
             </div>
 
             <div class="full">
@@ -81,9 +104,10 @@ const FIRE_HTML = `
             </div>
 
             <div>
-              <label>目標安全提領率</label>
-              <div class="sub">退休後每年從資產領出的比例。越高代表越早退、但越容易花光（4% 是經典的保守基準）。</div>
+              <label for="safeRate">目標安全提領率</label>
+              <div class="sub">退休後每年從資產領出的比例。越高代表越早退、但越容易花光（4% 是經典的保守基準）。可填 2–8%。</div>
               <div class="inrow"><input type="number" id="safeRate" value="4" step="0.1" min="2" max="8" style="width:110px"><span class="suffix">%</span></div>
+              <div class="rangehint" id="rateHint"></div>
             </div>
             <div>
               <label>退休後要花幾年（餘命）<span class="slval" id="lenVal" style="float:right;font-weight:400"></span></label>
@@ -183,7 +207,7 @@ const FIRE_HTML = `
               <span><i style="background:var(--bad)"></i>失敗路徑</span>
             </div>
           </div>
-          <div class="canvas-wrap"><canvas id="pathChart"></canvas></div>
+          <div class="canvas-wrap"><canvas id="pathChart" role="img" aria-label="資產路徑圖：載入中"></canvas></div>
           <div class="chartnote" id="pathNote"></div>
         </div>
       </div>
@@ -408,23 +432,57 @@ function addFlow(data){const id=++flowSeq;const d=data||{name:'',type:'income',a
   $('flows').appendChild(el);}
 
 function allocOf(sId,bId){let ws=parseInt($(sId).value)/100,wb=parseInt($(bId).value)/100;if(ws+wb>1)wb=1-ws;const wc=Math.max(0,1-ws-wb);return {ws,wb,wc};}
+
+/* P1-4：安全提領率與目標退休年齡改用 Number.isFinite + clamp，並把說明寫回畫面。
+   原本的 ||4 / ||65 會把「使用者正在清空欄位重打」誤判為未填，靜默套用預設值。 */
+function readSafeRate(){
+  const r=readBounded($('safeRate').value,SAFE_RATE,'安全提領率','%');
+  const el=$('rateHint'); if(el) el.textContent=r.note;
+  return r.value;
+}
+function readTargetAge(){
+  const r=readBounded($('targetAge').value,TARGET_AGE,'目標退休年齡','歲');
+  const el=$('ageHint'); if(el) el.textContent=$('manualAge').checked?r.note:'';
+  return r.value;
+}
+
 function readConfig(){
   const sp=readStratParams();
   const pre=allocOf('alStocks','alBonds'),post=allocOf('alStocksPost','alBondsPost');
   const flows=flowState.map(f=>({type:f.type,amount:Math.max(0,f.amount||0),start:Math.max(1,Math.round(f.start||1)),end:Math.max(1,Math.round(f.end||1)),inflationAdj:!!f.infl}));
-  return {age:parseInt($('age').value)||0,startCap:Math.max(0,parseFloat($('startCap').value)||0),
-    annualContrib:Math.max(0,(parseFloat($('monthly').value)||0)*12),
-    spending:Math.max(0,parseFloat($('spend').value)||0),safeRate:Math.max(0.01,(parseFloat($('safeRate').value)||4)/100),
-    length:parseInt($('length').value),
-    manualAge:$('manualAge').checked,targetAge:parseInt($('targetAge').value)||65,
+  const numOr=(v,def)=>{const x=parseFloat(v);return Number.isFinite(x)?x:def;};
+  return {age:Math.max(0,numOr($('age').value,0)),startCap:Math.max(0,numOr($('startCap').value,0)),
+    annualContrib:Math.max(0,numOr($('monthly').value,0)*12),
+    spending:Math.max(0,numOr($('spend').value,0)),safeRate:readSafeRate()/100,
+    length:numOr($('length').value,30),
+    manualAge:$('manualAge').checked,targetAge:readTargetAge(),
     ws:pre.ws,wb:pre.wb,wc:pre.wc,wsPost:post.ws,wbPost:post.wb,wcPost:post.wc,
-    fee:(parseFloat($('fee').value)||0)/100,flows,strat:sp.strat,sp:sp.sp,fn:sp.fn,cur:$('cur').value};
+    fee:Math.max(0,numOr($('fee').value,0))/100,flows,strat:sp.strat,sp:sp.sp,fn:sp.fn,cur:$('cur').value};
 }
 
 /* ---------- render ---------- */
 function setSticky(age,yrs,rate,word,col){$('sbAge').textContent=age;$('sbYrs').textContent=yrs;$('sbRate').textContent=rate;$('sbRate').style.color=col;$('sbWord').textContent=word;$('sbWord').style.color=col;}
+
+/* P1-2：三個大金額欄位的口語化提示（本金 / 每月投入 / 退休年支出） */
+const MONEY_HINTS=[['startCap','hint-startCap'],['monthly','hint-monthly'],['spend','hint-spend']];
+function syncMoneyHints(cur){
+  MONEY_HINTS.forEach(([inp,hint])=>{
+    const i=$(inp),h=$(hint);
+    if(i&&h)h.textContent=moneyHintOf(i.value,cur||$('cur').value);
+  });
+}
+
+/* P2-4：共享持股快照過期提示 */
+function fireStaleNote(){
+  const st=getSettings();
+  const d=holdingsAgeDays();
+  if(d==null||!(st.staleDays>0)||d<st.staleDays)return '';
+  return `注意：持股現值快照已 ${d} 天未更新（門檻 ${st.staleDays} 天），帶入的本金可能失真。建議先到「組合偏離」更新現值。`;
+}
+
 function render(){
   const cfg=readConfig(),cur=cfg.cur;
+  syncMoneyHints(cur);
   const acc=accumSeriesMode(cfg,0);const FI=cfg.spending/cfg.safeRate;
   const solvedN=yearsTo(acc.med,FI);
   let N,reachable;
@@ -549,7 +607,17 @@ function drawPaths(cv,accessor,note,opt){
   $(note).textContent=(clipped?'已裁切極端高值（最高 '+fmtCompact(realMax,cur)+'）以利檢視。':'')+(opt.foot||'');
 }
 function drawCharts(){if(!lastResult)return;const A=lastResult.N,age=lastResult.age;
-  drawPaths($('pathChart'),p=>p.full,'pathNote',{markX:A,retireAge:age+A,fiLine:lastResult.FI,xlabel:'年（從現在起）',foot:'金線是中位數路徑。'});}
+  drawPaths($('pathChart'),p=>p.full,'pathNote',{markX:A,retireAge:age+A,fiLine:lastResult.FI,xlabel:'年（從現在起）',foot:'金線是中位數路徑。'});
+  // P1-7：canvas 對螢幕報讀器是空的，補上文字化的結論
+  const cv=$('pathChart');
+  if(cv){
+    const R=lastResult.R,cfg=lastResult.cfg;
+    const label=R.n
+      ? `資產路徑圖：${R.n} 條路徑，累積 ${A} 年後於 ${age+A} 歲退休，退休期 ${cfg.length} 年，成功率 ${R.sr.toFixed(0)}%，失敗路徑 ${R.fails} 條。自由數字 ${fmtCompact(lastResult.FI,cfg.cur)}。`
+      : '資產路徑圖：目前沒有可回測的路徑。';
+    cv.setAttribute('role','img');
+    cv.setAttribute('aria-label',label);
+  }}
 
 function syncAllocOne(sId,bId,sV,bV,bar,lS,lB,lC){let s=parseInt($(sId).value),b=parseInt($(bId).value);if(s+b>100){b=100-s;$(bId).value=b;}const c=100-s-b;
   $(sV).textContent=s+'%';$(bV).textContent=b+'%';$(lS).textContent=s+'%';$(lB).textContent=b+'%';$(lC).textContent=c+'%';
@@ -594,12 +662,15 @@ function configFromState(s){
   (def.params||[]).forEach(pr=>{let x=parseFloat((s.sp||{})[pr.k]);if(isNaN(x))x=pr.def;sp[pr.k]=pr.raw?x:x/100;});
   const pre=allocFromVals(v.alStocks,v.alBonds),post=allocFromVals(v.alStocksPost,v.alBondsPost);
   const flows=(s.flows||[]).map(f=>({type:f.type,amount:Math.max(0,f.amount||0),start:Math.max(1,Math.round(f.start||1)),end:Math.max(1,Math.round(f.end||1)),inflationAdj:f.infl!==false}));
-  return {age:parseInt(v.age)||0,startCap:Math.max(0,parseFloat(v.startCap)||0),
-    annualContrib:Math.max(0,(parseFloat(v.monthly)||0)*12),
-    spending:Math.max(0,parseFloat(v.spend)||0),safeRate:Math.max(0.01,(parseFloat(v.safeRate)||4)/100),
-    length:parseInt(v.length)||30,manualAge:!!s.manualAge,targetAge:parseInt(v.targetAge)||65,
+  // P1-4：存檔狀態同樣改用 Number.isFinite + clamp，避免存進去的 0 被讀成預設值
+  const numOr=(x,def)=>{const n=parseFloat(x);return Number.isFinite(n)?n:def;};
+  const clamp=(x,{min,max,def})=>{const n=parseFloat(x);return Number.isFinite(n)?Math.min(max,Math.max(min,n)):def;};
+  return {age:Math.max(0,numOr(v.age,0)),startCap:Math.max(0,numOr(v.startCap,0)),
+    annualContrib:Math.max(0,numOr(v.monthly,0)*12),
+    spending:Math.max(0,numOr(v.spend,0)),safeRate:clamp(v.safeRate,SAFE_RATE)/100,
+    length:numOr(v.length,30),manualAge:!!s.manualAge,targetAge:clamp(v.targetAge,TARGET_AGE),
     ws:pre.ws,wb:pre.wb,wc:pre.wc,wsPost:post.ws,wbPost:post.wb,wcPost:post.wc,
-    fee:(parseFloat(v.fee)||0)/100,flows,strat,sp,fn:def.fn,cur:s.cur||'NT$'};
+    fee:Math.max(0,numOr(v.fee,0))/100,flows,strat,sp,fn:def.fn,cur:s.cur||'NT$'};
 }
 function summarizeState(s,forceMode){
   const prev=MODE;MODE=forceMode||(s.mode==='mc'?'mc':'hist');
@@ -686,7 +757,14 @@ function init(){
   $('modeMc').addEventListener('click',()=>setMode('mc'));
   $('pullCap').addEventListener('click',()=>{
     const t=portfolioTotal();
-    if(t>0){$('startCap').value=Math.round(t);schedule();scFlash('已帶入持股總值 ✓');}
+    if(t>0){
+      $('startCap').value=Math.round(t);
+      // P2-4：帶入的是手動輸入的快照，久未更新要講清楚
+      const note=fireStaleNote();
+      $('fireStale').textContent=note;
+      schedule();
+      scFlash(note?'已帶入持股總值（快照較舊，見提示）':'已帶入持股總值 ✓');
+    }
     else alertModal('共享持股資料目前為空。先到「組合偏離」輸入持股，或手動填本金。');
   });
   $('scSave').addEventListener('click',()=>{
@@ -715,6 +793,8 @@ function init(){
   const saved=get(FIRE_STATE_KEY,null);
   if(saved){applyState(saved);}
   else{renderStratParams();syncAlloc();$('lenVal').textContent='30 年';setMode('hist');}
+  syncMoneyHints();
+  markLiveRegions(view);  // P1-7：scMsg 等 flash 訊息改為 aria-live
 }
 init();
 }

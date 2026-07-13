@@ -2,25 +2,37 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>投資工具箱</title>
+<meta name="description" content="FIRE 試算、分批建倉、組合偏離、交易日誌。純靜態、零依賴，資料只存在你的瀏覽器。">
+<!-- P2-5：PWA 最低配置（manifest + 圖標，不加 service worker，避免快取複雜度） -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f1115">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="工具箱">
+<link rel="icon" type="image/svg+xml" href="assets/icons/favicon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="assets/icons/icon-192.png">
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,900&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/theme.css">
 </head>
 <body>
-  <nav class="topnav">
+  <a class="skiplink" href="#view">跳到主要內容</a>
+  <nav class="topnav" aria-label="主要導航">
     <div class="mark">投資工具箱<span>Toolbox</span></div>
     <div class="navlinks" id="navlinks"></div>
     <div class="navtools">
-      <button id="btn-export" title="把所有本機資料下載成 JSON 備份">匯出</button>
-      <button id="btn-import" title="從 JSON 備份還原資料">匯入</button>
-      <button id="btn-clear" class="danger" title="清除本工具在此瀏覽器的所有資料">清除</button>
+      <button id="btn-export" type="button" title="把所有本機資料下載成 JSON 備份">匯出</button>
+      <button id="btn-import" type="button" title="從 JSON 備份還原資料">匯入</button>
+      <button id="btn-clear" type="button" class="danger" title="清除本工具在此瀏覽器的所有資料">清除</button>
       <input type="file" id="file-import" accept="application/json,.json" hidden>
     </div>
   </nav>
-  <main class="view-wrap" id="view"></main>
+  <main class="view-wrap" id="view" tabindex="-1"></main>
   <script type="module" src="assets/shell.js"></script>
 </body>
 </html>

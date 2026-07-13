@@ -5,19 +5,46 @@
    - 剩餘現金佔組合% 對照設定頁現金舒適區間下緣
    - 多計畫存 localStorage、可命名/載入/刪除、每批可標記已執行
    - 不寫回共享持股資料（依使用者決策）
+
+   P0-5：工作中的輸入自動存草稿（itb:trancheDraft）。原本 mount 一律 state = defaultState()，
+        「填到一半 → 跳去組合偏離查數字 → 跳回來」時價格、現金、批次比重、觸發條件全部歸零，
+        與 FIRE 模組有 fireInputs 自動記憶的行為不一致。
+   P1-2：可用現金 / 目標金額 / 組合總值 三欄加上口語化金額提示。
+   P2-4：「帶入持股」時提示快照是否已過期。
    ============================================================ */
-import { get, set, remove, portfolioTotal } from '../../core/store.js';
+import { get, set, remove, portfolioTotal, holdingsAgeDays } from '../../core/store.js';
 import { getSettings } from '../../core/settings.js';
-import { confirmModal, alertModal, flowCrumb } from '../../core/ui.js';
+import { confirmModal, alertModal, flowCrumb, markLiveRegions } from '../../core/ui.js';
+import { moneyHintOf } from '../../core/format.js';
 
 export const id = 'tranche';
 export const title = '分批建倉';
 
 const PLANS_KEY = 'tranchePlans';
+const DRAFT_KEY = 'trancheDraft';   // P0-5：工作中輸入的自動草稿
 
 let state, plansCache;
+let draftTimer = null;
 
-export function unmount() {}
+export function unmount() { clearTimeout(draftTimer); }
+
+/* P0-5：把目前工作中的 state 存成草稿（debounce，避免每個按鍵都寫 localStorage） */
+function saveDraft() {
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => {
+    try { set(DRAFT_KEY, JSON.parse(JSON.stringify(state))); } catch (e) {}
+  }, 300);
+}
+function clearDraft() { clearTimeout(draftTimer); remove(DRAFT_KEY); }
+
+/* 草稿是否有實質內容（全空的草稿不必還原，避免蓋掉 defaultState 的合理預設） */
+function draftHasContent(d) {
+  if (!d || typeof d !== 'object') return false;
+  return !!(String(d.name || '').trim() || String(d.ticker || '').trim()
+    || d.price > 0 || d.cash > 0 || d.targetAmount > 0 || d.targetPct > 0
+    || d.portfolioTotal > 0 || d.heldShares > 0
+    || (Array.isArray(d.batches) && d.batches.some(b => b && (String(b.trigger || '').trim() || b.executed))));
+}
 
 /* ---------- 工具 ---------- */
 function fmt(n) {
@@ -240,6 +267,7 @@ function renderResults(view) {
     state.batches[+cb.dataset.exec].executed = cb.checked;
     autosaveExec(view);
     renderResults(view);
+    saveDraft();
   }));
 
   // A6：把某批以今天日期記入交易日誌（買進），打通執行 → 記錄
@@ -279,7 +307,8 @@ function autosaveExec(view) {
     renderPlans(view);
     flash(view, '已執行狀態已自動存回計畫 ✓');
   } else {
-    flash(view, '提示：此計畫尚未儲存，勾選狀態重新整理後不會保留');
+    // P0-5 之後草稿會保留勾選狀態，但仍提示這尚未成為一個具名計畫
+    flash(view, '提示：此計畫尚未命名儲存（草稿會保留，但不會出現在計畫清單）');
   }
 }
 
@@ -327,6 +356,7 @@ function renderBatchInputs(view) {
     const i = +inp.dataset.bi, k = inp.dataset.bk;
     state.batches[i][k] = inp.type === 'number' ? (parseFloat(inp.value) || 0) : inp.value;
     renderResults(view);
+    saveDraft();
   }));
 }
 
@@ -345,7 +375,11 @@ function renderPlans(view) {
   box.innerHTML = chips;
   box.querySelectorAll('[data-load]').forEach(b => b.addEventListener('click', () => {
     const p = plansCache.find(x => x.id === b.dataset.load);
-    if (p) { state = JSON.parse(JSON.stringify(p)); syncForm(view); renderBatchInputs(view); renderResults(view); }
+    if (p) {
+      state = JSON.parse(JSON.stringify(p));
+      syncForm(view); syncAllMoneyHints(view); renderBatchInputs(view); renderResults(view); saveDraft();
+      flash(view, `已載入「${p.name || '未命名'}」`);
+    }
   }));
   box.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
     const p = plansCache.find(x => x.id === b.dataset.del);
@@ -373,8 +407,11 @@ function syncForm(view) {
 
 function setMode(view, mode) {
   state.targetMode = mode;
-  view.querySelector('#mode-amount').classList.toggle('on', mode === 'amount');
-  view.querySelector('#mode-pct').classList.toggle('on', mode === 'pct');
+  const bA = view.querySelector('#mode-amount'), bP = view.querySelector('#mode-pct');
+  bA.classList.toggle('on', mode === 'amount');
+  bP.classList.toggle('on', mode === 'pct');
+  bA.setAttribute('aria-pressed', String(mode === 'amount'));
+  bP.setAttribute('aria-pressed', String(mode === 'pct'));
   view.querySelector('#row-amount').style.display = mode === 'amount' ? '' : 'none';
   view.querySelector('#row-pct').style.display = mode === 'pct' ? '' : 'none';
   // A5：切到「佔組合 %」時，若有共享持股資料就自動帶入組合總值
@@ -383,9 +420,34 @@ function setMode(view, mode) {
     if (t > 0) {
       state.portfolioTotal = t;
       view.querySelector('#tr-ptotal').value = t;
-      flash(view, '已自動帶入共享持股的組合總值');
+      syncMoneyHint(view, 'tr-ptotal');
+      const note = staleNote();               // P2-4
+      const se = view.querySelector('#tr-stale');
+      if (se) se.textContent = note;
+      flash(view, note ? '已自動帶入組合總值（快照較舊，見提示）' : '已自動帶入共享持股的組合總值');
     }
   }
+}
+
+/* P1-2：三個大金額欄位的口語化提示（NT$ 動輒七、八位數，裸數字容易多打少打一個 0） */
+const MONEY_HINTS = { 'tr-cash': 'hint-cash', 'tr-tamount': 'hint-tamount', 'tr-ptotal': 'hint-ptotal' };
+function syncMoneyHint(view, inputId) {
+  const hintId = MONEY_HINTS[inputId];
+  if (!hintId) return;
+  const inp = view.querySelector('#' + inputId);
+  const el = view.querySelector('#' + hintId);
+  if (inp && el) el.textContent = moneyHintOf(inp.value);
+}
+function syncAllMoneyHints(view) {
+  Object.keys(MONEY_HINTS).forEach(id => syncMoneyHint(view, id));
+}
+
+/* P2-4：共享持股快照是否已過期，回傳提示字串（未過期回空字串） */
+function staleNote() {
+  const s = getSettings();
+  const d = holdingsAgeDays();
+  if (d == null || !(s.staleDays > 0) || d < s.staleDays) return '';
+  return `注意：共享持股的現值快照已 ${d} 天未更新（門檻 ${s.staleDays} 天），組合總值可能失真。建議先到「組合偏離」更新現值。`;
 }
 
 /* ---------- mount ---------- */
@@ -403,24 +465,26 @@ export function mount(view) {
       <div class="controls">
         <div class="panel">
           <div class="seclabel">標的與資金</div>
-          <div class="field"><label>標的代號（選填）</label><input type="text" id="tr-ticker" placeholder="例：NVDA" style="text-transform:uppercase"></div>
-          <div class="field"><label>標的現價</label><input type="number" id="tr-price" min="0" step="0.01" placeholder="每股價格"></div>
-          <div class="field"><label>可用現金</label><input type="number" id="tr-cash" min="0" step="1000" placeholder="這次建倉可動用的現金"></div>
-          <div class="field"><label>目前已持有股數（選填）</label><input type="number" id="tr-held" min="0" step="1" placeholder="0"></div>
+          <div class="field"><label for="tr-ticker">標的代號（選填）</label><input type="text" id="tr-ticker" placeholder="例：NVDA" style="text-transform:uppercase"></div>
+          <div class="field"><label for="tr-price">標的現價</label><input type="number" id="tr-price" min="0" step="0.01" placeholder="每股價格"></div>
+          <div class="field"><label for="tr-cash">可用現金</label><input type="number" id="tr-cash" min="0" step="1000" placeholder="這次建倉可動用的現金"><div class="moneyhint" id="hint-cash"></div></div>
+          <div class="field"><label for="tr-held">目前已持有股數（選填）</label><input type="number" id="tr-held" min="0" step="1" placeholder="0"></div>
         </div>
 
         <div class="panel" style="margin-top:18px">
           <div class="seclabel">目標配置</div>
-          <div class="seg-mode" style="margin-bottom:16px">
-            <button id="mode-amount" class="on">直接填金額</button>
-            <button id="mode-pct">佔組合 %</button>
+          <div class="seg-mode" style="margin-bottom:16px" role="group" aria-label="目標配置模式">
+            <button id="mode-amount" class="on" type="button" aria-pressed="true">直接填金額</button>
+            <button id="mode-pct" type="button" aria-pressed="false">佔組合 %</button>
           </div>
-          <div class="field" id="row-amount"><label>目標配置金額</label><input type="number" id="tr-tamount" min="0" step="1000" placeholder="總共想投入這檔多少"></div>
-          <div class="field" id="row-pct" style="display:none"><label>目標佔組合比重 %</label><input type="number" id="tr-tpct" min="0" max="100" step="0.5" placeholder="例：8"></div>
+          <div class="field" id="row-amount"><label for="tr-tamount">目標配置金額</label><input type="number" id="tr-tamount" min="0" step="1000" placeholder="總共想投入這檔多少"><div class="moneyhint" id="hint-tamount"></div></div>
+          <div class="field" id="row-pct" style="display:none"><label for="tr-tpct">目標佔組合比重 %</label><input type="number" id="tr-tpct" min="0" max="100" step="0.5" placeholder="例：8"></div>
           <div class="field">
-            <label>組合總值</label>
+            <label for="tr-ptotal">組合總值</label>
             <div class="sub">用來計算剩餘現金佔組合 %（佔組合 % 模式必填）。</div>
             <div class="inrow"><input type="number" id="tr-ptotal" min="0" step="10000" placeholder="整體投資組合市值"><button class="btn-ghost" id="tr-pull" type="button" style="white-space:nowrap">帶入持股</button></div>
+            <div class="moneyhint" id="hint-ptotal"></div>
+            <div class="rangehint" id="tr-stale"></div>
           </div>
         </div>
 
@@ -449,9 +513,14 @@ export function mount(view) {
     </div>`;
 
   const q = id => view.querySelector('#' + id);
+  const syncHint = id => syncMoneyHint(view, id);
+  const syncAllHints = () => syncAllMoneyHints(view);
+
   const bind = (id, key, num) => q(id).addEventListener('input', () => {
     state[key] = num ? (parseFloat(q(id).value) || 0) : q(id).value;
+    syncHint(id);
     renderResults(view);
+    saveDraft(); // P0-5
   });
   bind('tr-ticker', 'ticker', false);
   bind('tr-price', 'price', true);
@@ -460,15 +529,24 @@ export function mount(view) {
   bind('tr-tamount', 'targetAmount', true);
   bind('tr-tpct', 'targetPct', true);
   bind('tr-ptotal', 'portfolioTotal', true);
-  q('tr-name').addEventListener('input', () => { state.name = q('tr-name').value; });
+  q('tr-name').addEventListener('input', () => { state.name = q('tr-name').value; saveDraft(); });
 
-  q('mode-amount').addEventListener('click', () => { setMode(view, 'amount'); renderResults(view); });
-  q('mode-pct').addEventListener('click', () => { setMode(view, 'pct'); renderResults(view); });
+  q('mode-amount').addEventListener('click', () => { setMode(view, 'amount'); syncAllHints(); renderResults(view); saveDraft(); });
+  q('mode-pct').addEventListener('click', () => { setMode(view, 'pct'); syncAllHints(); renderResults(view); saveDraft(); });
 
   q('tr-pull').addEventListener('click', () => {
     const t = portfolioTotal();
-    if (t > 0) { state.portfolioTotal = t; q('tr-ptotal').value = t; renderResults(view); }
-    else alertModal('共享持股資料目前為空。請先在「組合偏離」模組輸入持股，或手動填組合總值。');
+    if (t > 0) {
+      state.portfolioTotal = t;
+      q('tr-ptotal').value = t;
+      syncHint('tr-ptotal');
+      // P2-4：帶入的是手動輸入的快照，久未更新要講清楚
+      const note = staleNote();
+      q('tr-stale').textContent = note;
+      flash(view, note ? '已帶入持股總值（快照較舊，見下方提示）' : '已帶入持股總值 ✓');
+      renderResults(view);
+      saveDraft();
+    } else alertModal('共享持股資料目前為空。請先在「組合偏離」模組輸入持股，或手動填組合總值。');
   });
 
   q('tr-count').addEventListener('change', () => {
@@ -476,12 +554,14 @@ export function mount(view) {
     resizeBatches(state.batchCount);
     renderBatchInputs(view);
     renderResults(view);
+    saveDraft();
   });
 
   q('tr-even').addEventListener('click', () => {
     evenizeBatches();
     renderBatchInputs(view);
     renderResults(view);
+    saveDraft();
     flash(view, '比重已平均分配');
   });
 
@@ -495,14 +575,29 @@ export function mount(view) {
     else { snapshot.id = uid(); plans.push(snapshot); }
     set(PLANS_KEY, plans);
     renderPlans(view);
+    saveDraft();
     flash(view, '已儲存 ✓');
   });
 
   q('tr-new').addEventListener('click', async () => {
     if (await confirmModal('清空目前輸入，開新計畫？（已儲存的計畫不受影響）')) {
+      clearDraft(); // P0-5：清空重來同時清掉草稿，否則下次進來又被還原
       state = defaultState(); syncForm(view); renderBatchInputs(view); renderResults(view);
+      syncAllHints();
+      q('tr-stale').textContent = '';
     }
   });
+
+  /* ---------- 還原順序：草稿 → 交接資料（交接優先，因為是使用者剛剛的明確意圖） ---------- */
+  // P0-5：還原上次未完成的輸入
+  const draft = get(DRAFT_KEY, null);
+  if (draftHasContent(draft)) {
+    state = Object.assign(defaultState(), draft);
+    if (!Array.isArray(state.batches) || !state.batches.length) state.batches = evenBatches(state.batchCount || 3);
+    state.batchCount = state.batches.length;
+    syncForm(view);
+    flash(view, '已還原上次未完成的輸入（按「清空重來」可放棄草稿）');
+  }
 
   // 接收「組合偏離 → 帶入建倉」的交接資料
   const ho = get('trancheHandoff', null);
@@ -513,12 +608,16 @@ export function mount(view) {
     state.targetAmount = Math.max(0, Math.round(ho.amount || 0));
     if (ho.portfolioTotal > 0) state.portfolioTotal = Math.round(ho.portfolioTotal);
     syncForm(view);
+    saveDraft();
     flash(view, `已帶入 ${ho.ticker} 回到目標所需金額，請填現價與可用現金`);
   }
 
+  syncAllHints();
+  q('tr-stale').textContent = state.portfolioTotal > 0 ? staleNote() : '';
   renderBatchInputs(view);
   renderPlans(view);
   renderResults(view);
+  markLiveRegions(view);
 }
 
 function flash(view, msg) {
